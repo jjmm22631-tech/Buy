@@ -9,6 +9,7 @@ from config import Config
 from database import Database
 from handlers.common import is_series_bot
 from keyboards import main_menu, subscription_keyboard
+from telegram_commands import set_admin_commands
 
 router = Router(name="start")
 logger = logging.getLogger(__name__)
@@ -51,6 +52,8 @@ async def show_subscription_gate(message: Message, channels: list[dict], db: Dat
 async def start_handler(message: Message, bot: Bot, db: Database, config: Config) -> None:
     await register_user(message, db)
     user = message.from_user
+    if user.id in config.admin_ids:
+        await set_admin_commands(bot, user.id, is_series_bot(bot, config))
     row = await db.fetchone("SELECT is_blocked FROM users WHERE telegram_id=?", (user.id,))
     if row and row["is_blocked"]:
         await message.answer("🚫 Botdan foydalanishingiz cheklangan. Admin bilan bog‘laning.")

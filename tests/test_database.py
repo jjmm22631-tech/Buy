@@ -4,6 +4,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 from config import Config, _load_env_file
 from database import Database
@@ -12,6 +13,9 @@ from handlers.movies import is_series_bot
 from keyboards import admin_menu, cancel_menu, main_menu, movie_menu, series_episodes_keyboard, series_seasons_keyboard
 from aiogram.types import ReplyKeyboardRemove
 from types import SimpleNamespace
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.methods import SetMyCommands
+from telegram_commands import set_admin_commands
 
 
 class DatabaseTests(unittest.IsolatedAsyncioTestCase):
@@ -210,6 +214,23 @@ class ConfigTests(unittest.TestCase):
                     os.environ.pop(key, None)
                 else:
                     os.environ[key] = value
+
+
+class TelegramCommandTests(unittest.IsolatedAsyncioTestCase):
+    async def test_missing_admin_chat_does_not_abort_command_setup(self) -> None:
+        bot = SimpleNamespace(
+            set_my_commands=AsyncMock(
+                side_effect=TelegramBadRequest(
+                    method=SetMyCommands(commands=[]),
+                    message="Bad Request: chat not found",
+                )
+            )
+        )
+
+        with self.assertLogs("telegram_commands", level="WARNING"):
+            await set_admin_commands(bot, admin_id=12345, series_enabled=True)
+
+        bot.set_my_commands.assert_awaited_once()
 
 
 if __name__ == "__main__":

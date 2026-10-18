@@ -31,6 +31,8 @@ Admin paneliga kira oladigan Telegram ID’larini vergul yoki bo‘sh joy bilan 
 
 Ikki Telegram botini bitta jarayonda ishga tushirish uchun Render Environment’da `BOT_TOKEN` va `BOT_TOKEN_2` ni kiriting. Qo‘shimcha tokenlarga `BOT_TOKEN_3` kabi nom berish yoki vergul bilan ajratilgan `BOT_TOKENS` qiymatidan foydalanish mumkin. Barcha botlar bir xil kino bazasi, adminlar va sozlamalarni ishlatadi; har bir botni BotFather’dan alohida yarating.
 
+Har bir admin bot buyruqlar ro‘yxatini olish uchun tegishli botga bir marta `/start` yuborishi kerak. Admin botni hali boshlamagan bo‘lsa, uning shaxsiy buyruqlari keyingi `/start` vaqtida o‘rnatiladi; bu holat botning ishga tushishini to‘xtatmaydi.
+
 ## Ikkinchi botdagi seriallar
 
 Serial funksiyalari faqat ikkinchi token (`BOT_TOKEN_2`, yoki ishga tushish tartibidagi ikkinchi token) uchun yoqiladi. Admin ikkinchi botda `/addseries` buyrug‘i bilan serial kodi, nomi va tavsifini kiritadi. Har bir video oldidan `/part <bo‘lim> <qism>` yuboradi (masalan, `/part 1 1`), so‘ng o‘sha qism videosini yuboradi; hammasi tugagach `/done` yozadi. `/addseriesepisode` mavjud serialga shu tartibda yangi bo‘lim/qismlar qo‘shadi, `/series` ro‘yxatni ko‘rsatadi. Foydalanuvchi serial kodini yuboradi, avval bo‘limni, keyin kerakli qismni tanlaydi va video botdan yuboriladi. Serial boshqaruvi pastki tugmali menyuda ko‘rsatilmaydi. Eski serial qismlari avtomatik ravishda 1-bo‘limga o‘tkaziladi.

@@ -5,13 +5,14 @@ from typing import Any, Awaitable, Callable
 from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
-from aiogram.types import BotCommand, BotCommandScopeChat, Message, Update
+from aiogram.types import Message, Update
 from aiogram import BaseMiddleware
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from config import Config, load_config
 from database import Database
 from handlers import admin, movies, payments, start
+from telegram_commands import admin_commands, public_commands, set_admin_commands
 
 
 class AvailabilityMiddleware(BaseMiddleware):
@@ -52,27 +53,9 @@ class AvailabilityMiddleware(BaseMiddleware):
 
 
 async def configure_commands(bot: Bot, admin_ids: tuple[int, ...], series_enabled: bool = False) -> None:
-    await bot.set_my_commands([
-        BotCommand(command="start", description="Botni boshlash"),
-        BotCommand(command="cancel", description="Joriy amalni bekor qilish"),
-    ])
-    admin_commands = [
-        BotCommand(command="start", description="Botni boshlash"),
-        BotCommand(command="admin", description="Admin paneli"),
-        BotCommand(command="cancel", description="Joriy amalni bekor qilish"),
-    ]
-    if series_enabled:
-        admin_commands.extend([
-            BotCommand(command="addseries", description="Serial qo‘shish"),
-            BotCommand(command="addseriesepisode", description="Serialga qism qo‘shish"),
-            BotCommand(command="part", description="Bo‘lim va qism raqamini belgilash"),
-            BotCommand(command="series", description="Seriallar ro‘yxati"),
-        ])
+    await bot.set_my_commands(public_commands())
     for admin_id in admin_ids:
-        await bot.set_my_commands(
-            admin_commands,
-            scope=BotCommandScopeChat(chat_id=admin_id),
-        )
+        await set_admin_commands(bot, admin_id, series_enabled)
 
 
 async def main() -> None:
