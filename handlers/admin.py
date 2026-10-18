@@ -77,7 +77,7 @@ async def open_admin(message: Message, db: Database, config: Config, bot: Bot) -
     if message.from_user.id not in config.admin_ids:
         await message.answer("⛔ Admin paneli faqat adminlar uchun.")
         return
-    await message.answer("🛠 Boshqaruv paneli", reply_markup=admin_menu(hide_keyboard=is_series_bot(bot, config)))
+    await message.answer("🛠 Boshqaruv paneli", reply_markup=admin_menu())
 
 
 @router.message(F.text == "🔙 Orqaga")

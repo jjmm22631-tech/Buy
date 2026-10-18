@@ -2,6 +2,7 @@ import logging
 
 from aiogram import Bot, F, Router
 from aiogram.filters import CommandStart
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
@@ -48,8 +49,15 @@ async def show_subscription_gate(message: Message, channels: list[dict], db: Dat
     await message.answer(text, reply_markup=subscription_keyboard(channels))
 
 
+def welcome_with_code_prompt(welcome: str) -> str:
+    if "kino kodini yuboring" in " ".join(welcome.casefold().split()):
+        return welcome
+    return f"{welcome.rstrip()}\n\n🎬 Kino kodini yuboring."
+
+
 @router.message(CommandStart())
-async def start_handler(message: Message, bot: Bot, db: Database, config: Config) -> None:
+async def start_handler(message: Message, state: FSMContext, bot: Bot, db: Database, config: Config) -> None:
+    await state.clear()
     await register_user(message, db)
     user = message.from_user
     if user.id in config.admin_ids:
@@ -62,7 +70,7 @@ async def start_handler(message: Message, bot: Bot, db: Database, config: Config
     if not allowed:
         await show_subscription_gate(message, channels, db)
         return
-    welcome = await db.get_setting("welcome_text", DEFAULT_WELCOME)
+    welcome = welcome_with_code_prompt(await db.get_setting("welcome_text", DEFAULT_WELCOME))
     await message.answer(
         welcome,
         reply_markup=main_menu(
@@ -79,7 +87,7 @@ async def subscription_check(callback: CallbackQuery, bot: Bot, db: Database, co
     if allowed:
         await callback.answer("Obuna tasdiqlandi!")
         await callback.message.answer(
-            await db.get_setting("welcome_text", DEFAULT_WELCOME),
+            welcome_with_code_prompt(await db.get_setting("welcome_text", DEFAULT_WELCOME)),
             reply_markup=main_menu(
                 callback.from_user.id in config.admin_ids,
                 await db.get_setting("payments_enabled", "0") == "1",

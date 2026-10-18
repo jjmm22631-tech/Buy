@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from typing import Any, Awaitable, Callable
 
 from aiogram import Bot, Dispatcher
@@ -13,6 +14,42 @@ from config import Config, load_config
 from database import Database
 from handlers import admin, movies, payments, start
 from telegram_commands import admin_commands, public_commands, set_admin_commands
+
+
+def healthcheck_response(request_line: bytes) -> tuple[int, bytes]:
+    parts = request_line.decode("ascii", errors="replace").split()
+    if len(parts) >= 2 and parts[0] == "GET" and parts[1].split("?", 1)[0] in {"/", "/health"}:
+        return 200, b"ok\n"
+    return 404, b"not found\n"
+
+
+async def _handle_healthcheck(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    status, body = healthcheck_response(await reader.readline())
+    reason = "OK" if status == 200 else "Not Found"
+    writer.write(
+        f"HTTP/1.1 {status} {reason}\r\n"
+        f"Content-Length: {len(body)}\r\n"
+        "Content-Type: text/plain; charset=utf-8\r\n"
+        "Connection: close\r\n\r\n".encode("ascii") + body
+    )
+    await writer.drain()
+    writer.close()
+    await writer.wait_closed()
+
+
+async def start_health_server(logger: logging.Logger) -> asyncio.Server | None:
+    port_value = os.getenv("PORT")
+    if port_value is None:
+        return None
+    try:
+        port = int(port_value)
+    except ValueError as error:
+        raise RuntimeError("PORT musbat port raqami bo‘lishi kerak.") from error
+    if not 1 <= port <= 65535:
+        raise RuntimeError("PORT 1 dan 65535 gacha bo‘lishi kerak.")
+    server = await asyncio.start_server(_handle_healthcheck, host="0.0.0.0", port=port)
+    logger.info("Health endpoint tinglamoqda: 0.0.0.0:%s", port)
+    return server
 
 
 class AvailabilityMiddleware(BaseMiddleware):
@@ -69,11 +106,12 @@ async def main() -> None:
     bots = [Bot(token=token) for token in config.bot_tokens]
     dispatcher = Dispatcher(storage=MemoryStorage())
     dispatcher.update.outer_middleware(AvailabilityMiddleware())
-    dispatcher.include_router(admin.router)
     dispatcher.include_router(start.router)
+    dispatcher.include_router(admin.router)
     dispatcher.include_router(payments.router)
     dispatcher.include_router(movies.router)
     dispatcher.errors.register(handle_error)
+    health_server = None
 
     try:
         await db.connect()
@@ -83,6 +121,7 @@ async def main() -> None:
             identity = await bot.get_me()
             logger.info("Bot ishga tushdi: @%s", identity.username)
         logger.info("Ownerlar soni: %s; botlar soni: %s", len(config.admin_ids), len(bots))
+        health_server = await start_health_server(logger)
         await dispatcher.start_polling(
             *bots,
             db=db,
@@ -94,6 +133,9 @@ async def main() -> None:
         logger.error("Telegram API xatosi (%s). Token va internet ulanishini tekshiring.", type(error).__name__)
         raise
     finally:
+        if health_server is not None:
+            health_server.close()
+            await health_server.wait_closed()
         await db.close()
         await asyncio.gather(*(bot.session.close() for bot in bots), return_exceptions=True)
 

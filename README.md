@@ -43,7 +43,7 @@ Serial funksiyalari faqat ikkinchi token (`BOT_TOKEN_2`, yoki ishga tushish tart
 python bot.py
 ```
 
-Bot long polling ishlatadi. Bir token bilan bir vaqtda faqat bitta polling jarayonini ishga tushiring. Adminlar `/admin` buyrug‘i orqali panelni ochadi. Kinolarni boshqarish menyusida qo‘shish, tahrirlash, qidirish, o‘chirish va ro‘yxat amallari mavjud. Kanal va foydalanuvchi boshqaruvi, broadcast, to‘lov va sozlamalar bo‘limlarida ko‘rsatilgan slash-buyruqlardan foydalaning.
+Bot long polling ishlatadi. Bir token bilan bir vaqtda faqat bitta polling jarayonini ishga tushiring. Har safar `/start` bosilganda oldingi suhbat bosqichi bekor qilinib, kino kodini yuborish so‘raladi. Adminlar `/admin` buyrug‘i orqali panelni ochadi. Kinolarni boshqarish menyusida qo‘shish, tahrirlash, qidirish, o‘chirish va ro‘yxat amallari mavjud. Kanal va foydalanuvchi boshqaruvi, broadcast, to‘lov va sozlamalar bo‘limlarida ko‘rsatilgan slash-buyruqlardan foydalaning.
 
 ## Majburiy obuna
 
@@ -64,6 +64,8 @@ Kanal havolasi ommaviy yoki taklif havolasi bo‘lishi mumkin. Bot `getChatMembe
 ## Hosting va zaxira
 
 Render’da **Background Worker** yarating, repository’ni ulang, Build Command sifatida `pip install -r requirements.txt`, Start Command sifatida `python bot.py` kiriting. Environment Variables bo‘limiga `BOT_TOKEN`, kerak bo‘lsa `BOT_TOKEN_2`, `OWNER_IDS`, `DATABASE_PATH=/var/data/kino_bot.sqlite3` va boshqa sozlamalarni kiriting. SQLite ma’lumotlari deploylar orasida saqlanishi uchun Render Persistent Disk ulang va mount path’ni `/var/data` qiling. Bepul yoki ephemeral disk restart/deploy vaqtida bazani yo‘qotishi mumkin. 24/7 ishlash hosting rejasiga bog‘liq.
+
+Bot long polling sababli odatda **Background Worker** bo‘lishi kerak; Worker logidagi `No open ports detected` xabari xato emas, chunki Worker port tinglashi shart emas. Agar Render **Web Service** sifatida joylashtirsangiz, servis bergan `PORT` o‘zgaruvchisi avtomatik tinglanadi; Render sozlamalarida health-check path sifatida `/health` ni belgilang.
 
 Zaxira nusxa olishdan oldin botni to‘xtating yoki SQLite’ning zaxira API’sidan foydalaning. Zaxirani alohida, himoyalangan joyda saqlang.
 
