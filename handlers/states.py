@@ -15,6 +15,18 @@ class MovieEdit(StatesGroup):
     value = State()
 
 
+class SeriesAdd(StatesGroup):
+    code = State()
+    title = State()
+    description = State()
+    episodes = State()
+
+
+class SeriesEpisodeAdd(StatesGroup):
+    code = State()
+    episodes = State()
+
+
 class AdminManage(StatesGroup):
     add_id = State()
     add_confirm = State()

@@ -5,7 +5,9 @@ from aiogram.filters import CommandStart
 from aiogram.types import CallbackQuery, Message
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
+from config import Config
 from database import Database
+from handlers.common import is_series_bot
 from keyboards import main_menu, subscription_keyboard
 
 router = Router(name="start")
@@ -46,7 +48,7 @@ async def show_subscription_gate(message: Message, channels: list[dict], db: Dat
 
 
 @router.message(CommandStart())
-async def start_handler(message: Message, bot: Bot, db: Database) -> None:
+async def start_handler(message: Message, bot: Bot, db: Database, config: Config) -> None:
     await register_user(message, db)
     user = message.from_user
     row = await db.fetchone("SELECT is_blocked FROM users WHERE telegram_id=?", (user.id,))
@@ -61,22 +63,24 @@ async def start_handler(message: Message, bot: Bot, db: Database) -> None:
     await message.answer(
         welcome,
         reply_markup=main_menu(
-            await db.get_admin(user.id) is not None,
+            user.id in config.admin_ids,
             await db.get_setting("payments_enabled", "0") == "1",
+            hide_keyboard=is_series_bot(bot, config),
         ),
     )
 
 
 @router.callback_query(F.data == "subscription:check")
-async def subscription_check(callback: CallbackQuery, bot: Bot, db: Database) -> None:
+async def subscription_check(callback: CallbackQuery, bot: Bot, db: Database, config: Config) -> None:
     allowed, channels = await subscription_status(bot, db, callback.from_user.id)
     if allowed:
         await callback.answer("Obuna tasdiqlandi!")
         await callback.message.answer(
             await db.get_setting("welcome_text", DEFAULT_WELCOME),
             reply_markup=main_menu(
-                await db.get_admin(callback.from_user.id) is not None,
+                callback.from_user.id in config.admin_ids,
                 await db.get_setting("payments_enabled", "0") == "1",
+                hide_keyboard=is_series_bot(bot, config),
             ),
         )
     else:

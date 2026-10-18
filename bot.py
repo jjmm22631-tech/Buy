@@ -5,7 +5,7 @@ from typing import Any, Awaitable, Callable
 from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
-from aiogram.types import BotCommand, Message, Update
+from aiogram.types import BotCommand, BotCommandScopeChat, Message, Update
 from aiogram import BaseMiddleware
 from aiogram.fsm.storage.memory import MemoryStorage
 
@@ -32,7 +32,7 @@ class AvailabilityMiddleware(BaseMiddleware):
             "ON CONFLICT(telegram_id) DO UPDATE SET full_name=excluded.full_name,username=excluded.username,last_active_at=CURRENT_TIMESTAMP",
             (user.id, user.full_name[:255], user.username),
         )
-        admin_user = await db.get_admin(user.id)
+        admin_user = user.id in data["config"].admin_ids
         if not admin_user:
             status = await db.get_setting("bot_enabled", "1")
             if status != "1":
@@ -51,12 +51,28 @@ class AvailabilityMiddleware(BaseMiddleware):
         return await handler(event, data)
 
 
-async def configure_commands(bot: Bot) -> None:
+async def configure_commands(bot: Bot, admin_ids: tuple[int, ...], series_enabled: bool = False) -> None:
     await bot.set_my_commands([
+        BotCommand(command="start", description="Botni boshlash"),
+        BotCommand(command="cancel", description="Joriy amalni bekor qilish"),
+    ])
+    admin_commands = [
         BotCommand(command="start", description="Botni boshlash"),
         BotCommand(command="admin", description="Admin paneli"),
         BotCommand(command="cancel", description="Joriy amalni bekor qilish"),
-    ])
+    ]
+    if series_enabled:
+        admin_commands.extend([
+            BotCommand(command="addseries", description="Serial qo‘shish"),
+            BotCommand(command="addseriesepisode", description="Serialga qism qo‘shish"),
+            BotCommand(command="part", description="Bo‘lim va qism raqamini belgilash"),
+            BotCommand(command="series", description="Seriallar ro‘yxati"),
+        ])
+    for admin_id in admin_ids:
+        await bot.set_my_commands(
+            admin_commands,
+            scope=BotCommandScopeChat(chat_id=admin_id),
+        )
 
 
 async def main() -> None:
@@ -79,8 +95,8 @@ async def main() -> None:
     try:
         await db.connect()
         await admin.seed_admins(db, config)
-        for bot in bots:
-            await configure_commands(bot)
+        for index, bot in enumerate(bots):
+            await configure_commands(bot, config.admin_ids, series_enabled=index == 1)
             identity = await bot.get_me()
             logger.info("Bot ishga tushdi: @%s", identity.username)
         logger.info("Ownerlar soni: %s; botlar soni: %s", len(config.admin_ids), len(bots))

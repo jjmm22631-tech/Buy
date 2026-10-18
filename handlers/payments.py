@@ -6,6 +6,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from config import Config
 from database import Database
 from handlers.start import register_user, show_subscription_gate, subscription_status
 from handlers.states import PaymentProof
@@ -68,7 +69,7 @@ async def payment_method(callback: CallbackQuery, state: FSMContext, db: Databas
 
 
 @router.message(PaymentProof.proof)
-async def payment_proof(message: Message, state: FSMContext, db: Database, bot: Bot) -> None:
+async def payment_proof(message: Message, state: FSMContext, db: Database, bot: Bot, config: Config) -> None:
     data = await state.get_data()
     method = data.get("payment_method")
     if not method:
@@ -97,26 +98,25 @@ async def payment_proof(message: Message, state: FSMContext, db: Database, bot: 
         (message.from_user.id, amount, str(method)[:100], proof_file_id),
     )
     await state.clear()
-    admins = await db.fetchall("SELECT telegram_id FROM admins")
     review_markup = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"payment:review:{payment_id}:approve"),
         InlineKeyboardButton(text="❌ Rad etish", callback_data=f"payment:review:{payment_id}:reject"),
     ]])
     delivered = 0
-    for admin in admins:
+    for admin_id in config.admin_ids:
         try:
             await bot.send_message(
-                admin["telegram_id"],
+                admin_id,
                 f"💳 Yangi to‘lov dalili\nTo‘lov ID: {payment_id}\nFoydalanuvchi: {message.from_user.id}\nSumma: {amount}\nUsul: {method}",
                 reply_markup=review_markup,
             )
             if message.text:
-                await bot.send_message(admin["telegram_id"], f"Dalil matni:\n{message.text[:3000]}")
+                await bot.send_message(admin_id, f"Dalil matni:\n{message.text[:3000]}")
             else:
-                await bot.copy_message(admin["telegram_id"], message.chat.id, message.message_id)
+                await bot.copy_message(admin_id, message.chat.id, message.message_id)
             delivered += 1
         except (TelegramBadRequest, TelegramForbiddenError) as error:
-            logger.info("To‘lov dalili adminga yetkazilmadi: admin_id=%s error=%s", admin["telegram_id"], type(error).__name__)
+            logger.info("To‘lov dalili adminga yetkazilmadi: admin_id=%s error=%s", admin_id, type(error).__name__)
     if delivered == 0:
         await message.answer("⚠️ To‘lov saqlandi, lekin adminlarga xabar yetkazilmadi. Botni adminlar /start qilganini tekshiring.")
     else:

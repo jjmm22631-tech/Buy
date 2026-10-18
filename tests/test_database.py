@@ -1,11 +1,17 @@
 import asyncio
 import os
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 
-from config import _load_env_file
+from config import Config, _load_env_file
 from database import Database
+from handlers.common import can
+from handlers.movies import is_series_bot
+from keyboards import admin_menu, cancel_menu, main_menu, movie_menu, series_episodes_keyboard, series_seasons_keyboard
+from aiogram.types import ReplyKeyboardRemove
+from types import SimpleNamespace
 
 
 class DatabaseTests(unittest.IsolatedAsyncioTestCase):
@@ -45,6 +51,59 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
         requests = await self.db.fetchone("SELECT COUNT(*) AS total FROM movie_requests")
         self.assertEqual(requests["total"], 1)
 
+    async def test_series_episodes_use_season_and_episode_numbers(self) -> None:
+        series_id = await self.db.create_series(
+            "SER1",
+            "Sinov serial",
+            "Tavsif",
+            [
+                {"season_number": 1, "episode_number": 1, "file_id": "season-1-episode-1", "file_type": "video"},
+                {"season_number": 2, "episode_number": 1, "file_id": "season-2-episode-1", "file_type": "video"},
+            ],
+        )
+        await self.db.add_series_episode(series_id, 1, 2, "season-1-episode-2", "document")
+        episodes = await self.db.fetchall(
+            "SELECT season_number,episode_number,file_id,file_type FROM series_episodes "
+            "WHERE series_id=? ORDER BY season_number,episode_number",
+            (series_id,),
+        )
+
+        self.assertEqual(
+            [(row["season_number"], row["episode_number"]) for row in episodes],
+            [(1, 1), (1, 2), (2, 1)],
+        )
+        self.assertEqual(episodes[1]["file_id"], "season-1-episode-2")
+        self.assertEqual(episodes[1]["file_type"], "document")
+        with self.assertRaises(ValueError):
+            await self.db.add_series_episode(series_id, 1, 2, "duplicate", "video")
+
+        await self.db.execute("DELETE FROM series WHERE id=?", (series_id,))
+        remaining = await self.db.fetchone("SELECT COUNT(*) AS total FROM series_episodes WHERE series_id=?", (series_id,))
+        self.assertEqual(remaining["total"], 0)
+
+    async def test_legacy_series_episodes_migrate_to_first_season(self) -> None:
+        legacy_path = Path(self.temp_dir.name) / "legacy.sqlite3"
+        with sqlite3.connect(legacy_path) as connection:
+            connection.executescript(
+                "CREATE TABLE series (id INTEGER PRIMARY KEY, code TEXT UNIQUE, title TEXT, description TEXT, "
+                "extra_text TEXT DEFAULT '', is_active INTEGER DEFAULT 1, created_at TEXT DEFAULT CURRENT_TIMESTAMP, "
+                "updated_at TEXT DEFAULT CURRENT_TIMESTAMP);"
+                "CREATE TABLE series_episodes (id INTEGER PRIMARY KEY AUTOINCREMENT, series_id INTEGER NOT NULL, "
+                "episode_number INTEGER NOT NULL, file_id TEXT NOT NULL, file_type TEXT DEFAULT 'video', "
+                "created_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(series_id, episode_number));"
+                "INSERT INTO series(id,code,title) VALUES(1,'OLD','Old series');"
+                "INSERT INTO series_episodes(id,series_id,episode_number,file_id,file_type) "
+                "VALUES(5,1,3,'legacy-file','document');"
+            )
+        legacy_db = Database(str(legacy_path))
+        await legacy_db.connect()
+        episode = await legacy_db.fetchone("SELECT * FROM series_episodes WHERE id=5")
+        await legacy_db.close()
+
+        self.assertEqual(episode["season_number"], 1)
+        self.assertEqual(episode["episode_number"], 3)
+        self.assertEqual(episode["file_id"], "legacy-file")
+
     async def test_admin_permissions_and_audit_log(self) -> None:
         await self.db.add_admin(2002, "admin", ["movies"], 1001)
         admin = await self.db.get_admin(2002)
@@ -52,6 +111,61 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
         await self.db.log_admin(1001, "admin_added", "2002")
         log = await self.db.fetchone("SELECT * FROM admin_logs WHERE admin_id=?", (1001,))
         self.assertEqual(log["action"], "admin_added")
+
+    async def test_admin_access_requires_configured_telegram_id(self) -> None:
+        config = Config("token", ("token",), 1001, (1001, 3003, 4004), "db.sqlite3", "INFO")
+        await self.db.add_admin(2002, "admin", ["movies"], 1001)
+        await self.db.add_admin(1001, "owner", ["movies"], 1001)
+
+        self.assertFalse(await can(self.db, 2002, "movies", config))
+        self.assertTrue(await can(self.db, 1001, "movies", config))
+
+
+class MainMenuTests(unittest.TestCase):
+    def test_public_menu_removes_keyboard_when_no_actions_are_enabled(self) -> None:
+        self.assertIsInstance(main_menu(False), ReplyKeyboardRemove)
+
+    def test_bot_two_can_remove_all_reply_keyboards(self) -> None:
+        self.assertIsInstance(main_menu(True, payments_enabled=True, hide_keyboard=True), ReplyKeyboardRemove)
+        self.assertIsInstance(admin_menu(hide_keyboard=True), ReplyKeyboardRemove)
+        self.assertIsInstance(movie_menu(hide_keyboard=True), ReplyKeyboardRemove)
+        self.assertIsInstance(cancel_menu(hide_keyboard=True), ReplyKeyboardRemove)
+
+    def test_public_menu_hides_search_channel_help_and_admin(self) -> None:
+        menu = main_menu(False, payments_enabled=True)
+        labels = {button.text for row in menu.keyboard for button in row}
+
+        self.assertEqual(labels, {"💳 To‘lov"})
+
+    def test_admin_menu_entry_is_only_added_for_admin(self) -> None:
+        menu = main_menu(True)
+        labels = {button.text for row in menu.keyboard for button in row}
+
+        self.assertEqual(labels, {"🛠 Admin paneli"})
+
+    def test_series_controls_are_not_shown_in_movie_menu(self) -> None:
+        labels = {button.text for row in movie_menu().keyboard for button in row}
+
+        self.assertNotIn("📺 Serial qo‘shish", labels)
+        self.assertNotIn("➕ Serialga qism", labels)
+        self.assertNotIn("📋 Seriallar", labels)
+
+    def test_series_features_are_bound_to_second_bot_token(self) -> None:
+        config = Config("token-1", ("token-1", "token-2"), 1001, (1001,), "db.sqlite3", "INFO")
+
+        self.assertFalse(is_series_bot(SimpleNamespace(token="token-1"), config))
+        self.assertTrue(is_series_bot(SimpleNamespace(token="token-2"), config))
+
+    def test_episode_button_is_bound_to_lookup_request(self) -> None:
+        keyboard = series_episodes_keyboard([{"id": 8, "episode_number": 2}], request_id=42)
+
+        self.assertEqual(keyboard.inline_keyboard[0][0].callback_data, "series:episode:42:8")
+
+    def test_season_button_leads_to_episode_selection(self) -> None:
+        keyboard = series_seasons_keyboard([{"season_number": 2}], request_id=42)
+
+        self.assertEqual(keyboard.inline_keyboard[0][0].text, "📁 2-bo‘lim")
+        self.assertEqual(keyboard.inline_keyboard[0][0].callback_data, "series:season:42:2")
 
 
 class ConfigTests(unittest.TestCase):

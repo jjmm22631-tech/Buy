@@ -22,14 +22,18 @@ BotFather’da `/newbot` yuborib bot yarating va tokenni oling. `.env` faylini t
 ```dotenv
 BOT_TOKEN=BotFather_bergan_token
 BOT_TOKEN_2=ikkinchi_bot_tokeni_ixtiyoriy
-OWNER_IDS=Telegram_ID
+OWNER_IDS=Telegram_ID_1,Telegram_ID_2,Telegram_ID_3
 DATABASE_PATH=data/kino_bot.sqlite3
 LOG_LEVEL=INFO
 ```
 
-Bir nechta asosiy admin ID’sini vergul yoki bo‘sh joy bilan ajrating. `MAIN_ADMIN_ID` eski sozlama nomi sifatida ham qo‘llanadi. `.env` maxfiy ma’lumot saqlaydi; uni ommaviy repoga yubormang.
+Admin paneliga kira oladigan Telegram ID’larini vergul yoki bo‘sh joy bilan ajrating; bu ro‘yxatda bo‘lmagan, hatto bazada admin sifatida yozilgan ID’lar ham admin buyruqlarini ishlata olmaydi. `MAIN_ADMIN_ID` eski sozlama nomi sifatida ham qo‘llanadi. `.env` maxfiy ma’lumot saqlaydi; uni ommaviy repoga yubormang.
 
 Ikki Telegram botini bitta jarayonda ishga tushirish uchun Render Environment’da `BOT_TOKEN` va `BOT_TOKEN_2` ni kiriting. Qo‘shimcha tokenlarga `BOT_TOKEN_3` kabi nom berish yoki vergul bilan ajratilgan `BOT_TOKENS` qiymatidan foydalanish mumkin. Barcha botlar bir xil kino bazasi, adminlar va sozlamalarni ishlatadi; har bir botni BotFather’dan alohida yarating.
+
+## Ikkinchi botdagi seriallar
+
+Serial funksiyalari faqat ikkinchi token (`BOT_TOKEN_2`, yoki ishga tushish tartibidagi ikkinchi token) uchun yoqiladi. Admin ikkinchi botda `/addseries` buyrug‘i bilan serial kodi, nomi va tavsifini kiritadi. Har bir video oldidan `/part <bo‘lim> <qism>` yuboradi (masalan, `/part 1 1`), so‘ng o‘sha qism videosini yuboradi; hammasi tugagach `/done` yozadi. `/addseriesepisode` mavjud serialga shu tartibda yangi bo‘lim/qismlar qo‘shadi, `/series` ro‘yxatni ko‘rsatadi. Foydalanuvchi serial kodini yuboradi, avval bo‘limni, keyin kerakli qismni tanlaydi va video botdan yuboriladi. Serial boshqaruvi pastki tugmali menyuda ko‘rsatilmaydi. Eski serial qismlari avtomatik ravishda 1-bo‘limga o‘tkaziladi.
 
 ## Ishga tushirish
 

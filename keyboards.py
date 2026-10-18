@@ -1,19 +1,26 @@
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
 
 
-def main_menu(is_admin: bool, payments_enabled: bool = False) -> ReplyKeyboardMarkup:
-    rows = [
-        [KeyboardButton(text="🔍 Kino qidirish"), KeyboardButton(text="📢 Kanalimiz")],
-        [KeyboardButton(text="ℹ️ Yordam")],
-    ]
+def main_menu(
+    is_admin: bool,
+    payments_enabled: bool = False,
+    hide_keyboard: bool = False,
+) -> ReplyKeyboardMarkup | ReplyKeyboardRemove:
+    if hide_keyboard:
+        return ReplyKeyboardRemove()
+    rows = []
     if payments_enabled:
         rows.append([KeyboardButton(text="💳 To‘lov")])
     if is_admin:
         rows.append([KeyboardButton(text="🛠 Admin paneli")])
+    if not rows:
+        return ReplyKeyboardRemove()
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
-def admin_menu() -> ReplyKeyboardMarkup:
+def admin_menu(hide_keyboard: bool = False) -> ReplyKeyboardMarkup | ReplyKeyboardRemove:
+    if hide_keyboard:
+        return ReplyKeyboardRemove()
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="🎬 Kinolar"), KeyboardButton(text="📢 Majburiy obuna")],
@@ -26,7 +33,9 @@ def admin_menu() -> ReplyKeyboardMarkup:
     )
 
 
-def movie_menu() -> ReplyKeyboardMarkup:
+def movie_menu(hide_keyboard: bool = False) -> ReplyKeyboardMarkup | ReplyKeyboardRemove:
+    if hide_keyboard:
+        return ReplyKeyboardRemove()
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="🎬 Kino qo‘shish"), KeyboardButton(text="✏️ Kinoni tahrirlash")],
@@ -38,7 +47,23 @@ def movie_menu() -> ReplyKeyboardMarkup:
     )
 
 
-def cancel_menu() -> ReplyKeyboardMarkup:
+def series_seasons_keyboard(seasons: list[dict], request_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"📁 {season['season_number']}-bo‘lim", callback_data=f"series:season:{request_id}:{season['season_number']}")]
+        for season in seasons
+    ])
+
+
+def series_episodes_keyboard(episodes: list[dict], request_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"▶️ {episode['episode_number']}-qism", callback_data=f"series:episode:{request_id}:{episode['id']}")]
+        for episode in episodes
+    ])
+
+
+def cancel_menu(hide_keyboard: bool = False) -> ReplyKeyboardMarkup | ReplyKeyboardRemove:
+    if hide_keyboard:
+        return ReplyKeyboardRemove()
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="❌ Bekor qilish")]],
         resize_keyboard=True,

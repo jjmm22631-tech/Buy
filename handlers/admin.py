@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 
-from aiogram import Bot, F, Router
+from aiogram import BaseMiddleware, Bot, F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -10,7 +10,7 @@ from aiogram.types import CallbackQuery, Message
 
 from config import Config
 from database import Database
-from handlers.common import can, deny_callback, deny_message
+from handlers.common import can, deny_callback, deny_message, is_series_bot
 from handlers.states import (
     AdminManage, Broadcast, ChannelManage, PaymentSetup, SettingEdit, UserManage,
 )
@@ -26,6 +26,28 @@ EDITABLE_SETTINGS = {
     "support_username": "Qo‘llab-quvvatlash username'i",
     "advertisement_text": "Reklama matni",
 }
+
+
+class AdminAccessMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        user = getattr(event, "from_user", None)
+        config: Config = data["config"]
+        if user and user.id not in config.admin_ids:
+            if isinstance(event, CallbackQuery):
+                await event.answer("⛔ Bu bo‘lim faqat adminlar uchun.", show_alert=True)
+            elif isinstance(event, Message):
+                text = (event.text or "").split(maxsplit=1)[0].split("@", 1)[0]
+                if event.text != "❌ Bekor qilish" and text != "/cancel":
+                    await event.answer("⛔ Bu bo‘lim faqat adminlar uchun.")
+                else:
+                    return await handler(event, data)
+            return None
+        return await handler(event, data)
+
+
+admin_access = AdminAccessMiddleware()
+router.message.outer_middleware(admin_access)
+router.callback_query.outer_middleware(admin_access)
 
 
 async def seed_admins(db: Database, config: Config) -> None:
@@ -51,59 +73,59 @@ async def seed_admins(db: Database, config: Config) -> None:
 
 @router.message(Command("admin"))
 @router.message(F.text == "🛠 Admin paneli")
-async def open_admin(message: Message, db: Database) -> None:
-    if not await db.get_admin(message.from_user.id):
+async def open_admin(message: Message, db: Database, config: Config, bot: Bot) -> None:
+    if message.from_user.id not in config.admin_ids:
         await message.answer("⛔ Admin paneli faqat adminlar uchun.")
         return
-    await message.answer("🛠 Boshqaruv paneli", reply_markup=admin_menu())
+    await message.answer("🛠 Boshqaruv paneli", reply_markup=admin_menu(hide_keyboard=is_series_bot(bot, config)))
 
 
 @router.message(F.text == "🔙 Orqaga")
-async def back_to_main(message: Message, db: Database) -> None:
+async def back_to_main(message: Message, db: Database, config: Config, bot: Bot) -> None:
     await message.answer(
         "Asosiy menyu",
         reply_markup=main_menu(
-            await db.get_admin(message.from_user.id) is not None,
+            message.from_user.id in config.admin_ids,
             await db.get_setting("payments_enabled", "0") == "1",
+            hide_keyboard=is_series_bot(bot, config),
         ),
     )
 
 
 @router.message(Command("cancel"))
 @router.message(F.text == "❌ Bekor qilish")
-async def cancel_state(message: Message, state: FSMContext, db: Database) -> None:
+async def cancel_state(message: Message, state: FSMContext, db: Database, config: Config, bot: Bot) -> None:
     current = await state.get_state()
     await state.clear()
-    if await db.get_admin(message.from_user.id):
-        await message.answer("❌ Jarayon bekor qilindi.", reply_markup=admin_menu())
+    if message.from_user.id in config.admin_ids:
+        await message.answer("❌ Jarayon bekor qilindi.", reply_markup=admin_menu(hide_keyboard=is_series_bot(bot, config)))
     elif current:
         await message.answer("Jarayon bekor qilindi.")
 
 
 @router.message(F.text == "👑 Adminlar")
-async def admin_management_menu(message: Message, db: Database, config: Config) -> None:
-    if message.from_user.id not in config.admin_ids and (await db.get_admin(message.from_user.id) or {}).get("role") != "owner":
+async def admin_management_menu(message: Message, db: Database, config: Config, bot: Bot) -> None:
+    if message.from_user.id not in config.admin_ids:
         await message.answer("⛔ Adminlarni faqat asosiy admin boshqaradi.")
         return
     await message.answer(
         "👑 Adminlarni boshqarish\n\n➕ Admin qo‘shish: /addadmin\n➖ Admin o‘chirish: /removeadmin\n📋 Ro‘yxat: /admins\n🔍 ID orqali qidirish: /findadmin <ID>",
-        reply_markup=admin_menu(),
+        reply_markup=admin_menu(hide_keyboard=is_series_bot(bot, config)),
     )
 
 
 async def is_owner(db: Database, config: Config, telegram_id: int) -> bool:
-    admin = await db.get_admin(telegram_id)
-    return telegram_id in config.admin_ids or bool(admin and admin["role"] == "owner")
+    return telegram_id in config.admin_ids
 
 
 @router.message(Command("addadmin"))
-async def add_admin_start(message: Message, state: FSMContext, db: Database, config: Config) -> None:
+async def add_admin_start(message: Message, state: FSMContext, db: Database, config: Config, bot: Bot) -> None:
     if not await is_owner(db, config, message.from_user.id):
         await message.answer("⛔ Faqat asosiy admin admin qo‘sha oladi.")
         return
     await state.clear()
     await state.set_state(AdminManage.add_id)
-    await message.answer("Yangi adminning Telegram ID raqamini yuboring:", reply_markup=cancel_menu())
+    await message.answer("Yangi adminning Telegram ID raqamini yuboring:", reply_markup=cancel_menu(hide_keyboard=is_series_bot(bot, config)))
 
 
 @router.message(AdminManage.add_id)
@@ -144,13 +166,13 @@ async def add_admin_confirm(callback: CallbackQuery, state: FSMContext, db: Data
 
 
 @router.message(Command("removeadmin"))
-async def remove_admin_start(message: Message, state: FSMContext, db: Database, config: Config) -> None:
+async def remove_admin_start(message: Message, state: FSMContext, db: Database, config: Config, bot: Bot) -> None:
     if not await is_owner(db, config, message.from_user.id):
         await message.answer("⛔ Faqat asosiy admin admin o‘chira oladi.")
         return
     await state.clear()
     await state.set_state(AdminManage.remove_id)
-    await message.answer("O‘chiriladigan adminning Telegram ID raqamini yuboring:", reply_markup=cancel_menu())
+    await message.answer("O‘chiriladigan adminning Telegram ID raqamini yuboring:", reply_markup=cancel_menu(hide_keyboard=is_series_bot(bot, config)))
 
 
 @router.message(AdminManage.remove_id)
@@ -263,8 +285,8 @@ async def cancel_inline(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.message(F.text == "📢 Majburiy obuna")
-async def channels_menu(message: Message, db: Database) -> None:
-    if await deny_message(message, db, "channels"):
+async def channels_menu(message: Message, db: Database, config: Config) -> None:
+    if await deny_message(message, db, "channels", config):
         return
     enabled = await db.get_setting("subscription_enabled", "1") == "1"
     await message.answer(
@@ -275,8 +297,8 @@ async def channels_menu(message: Message, db: Database) -> None:
 
 
 @router.message(Command("addchannel"))
-async def add_channel(message: Message, db: Database) -> None:
-    if await deny_message(message, db, "channels"):
+async def add_channel(message: Message, db: Database, config: Config) -> None:
+    if await deny_message(message, db, "channels", config):
         return
     parts = (message.text or "").split(maxsplit=1)
     fields = [part.strip() for part in parts[1].split("|")] if len(parts) == 2 else []
@@ -299,8 +321,8 @@ async def add_channel(message: Message, db: Database) -> None:
 
 
 @router.message(Command("channels"))
-async def channel_list(message: Message, db: Database) -> None:
-    if await deny_message(message, db, "channels"):
+async def channel_list(message: Message, db: Database, config: Config) -> None:
+    if await deny_message(message, db, "channels", config):
         return
     channels = await db.fetchall("SELECT * FROM channels ORDER BY id")
     if not channels:
@@ -311,8 +333,8 @@ async def channel_list(message: Message, db: Database) -> None:
 
 
 @router.message(Command("delchannel"))
-async def delete_channel(message: Message, db: Database) -> None:
-    if await deny_message(message, db, "channels"):
+async def delete_channel(message: Message, db: Database, config: Config) -> None:
+    if await deny_message(message, db, "channels", config):
         return
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) != 2 or not parts[1].isdigit():
@@ -327,8 +349,8 @@ async def delete_channel(message: Message, db: Database) -> None:
 
 
 @router.message(Command("subscription_toggle"))
-async def toggle_subscription(message: Message, db: Database) -> None:
-    if await deny_message(message, db, "channels"):
+async def toggle_subscription(message: Message, db: Database, config: Config) -> None:
+    if await deny_message(message, db, "channels", config):
         return
     current = await db.get_setting("subscription_enabled", "1") == "1"
     value = "0" if current else "1"
@@ -338,23 +360,23 @@ async def toggle_subscription(message: Message, db: Database) -> None:
 
 
 @router.message(F.text == "👥 Foydalanuvchilar")
-async def users_menu(message: Message, db: Database) -> None:
-    if await deny_message(message, db, "users"):
+async def users_menu(message: Message, db: Database, config: Config) -> None:
+    if await deny_message(message, db, "users", config):
         return
     await message.answer("👥 Foydalanuvchilar\nJami: /userstats\nRo‘yxat: /users\nID bo‘yicha qidirish: /user <ID>\nBloklash: /blockuser <ID>\nBlokdan chiqarish: /unblockuser <ID>")
 
 
 @router.message(Command("userstats"))
-async def user_stats(message: Message, db: Database) -> None:
-    if await deny_message(message, db, "users"):
+async def user_stats(message: Message, db: Database, config: Config) -> None:
+    if await deny_message(message, db, "users", config):
         return
     row = await db.fetchone("SELECT COUNT(*) total, SUM(is_blocked=0) active, SUM(is_blocked=1) blocked FROM users")
     await message.answer(f"Jami foydalanuvchilar: {row['total']}\n🟢 Faol: {row['active'] or 0}\n🚫 Bloklangan: {row['blocked'] or 0}")
 
 
 @router.message(Command("users"))
-async def user_list(message: Message, db: Database) -> None:
-    if await deny_message(message, db, "users"):
+async def user_list(message: Message, db: Database, config: Config) -> None:
+    if await deny_message(message, db, "users", config):
         return
     rows = await db.fetchall("SELECT telegram_id,full_name,username,is_blocked FROM users ORDER BY id DESC LIMIT 50")
     if not rows:
@@ -367,8 +389,8 @@ async def user_list(message: Message, db: Database) -> None:
 
 
 @router.message(Command("user"))
-async def find_user(message: Message, db: Database) -> None:
-    if await deny_message(message, db, "users"):
+async def find_user(message: Message, db: Database, config: Config) -> None:
+    if await deny_message(message, db, "users", config):
         return
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) != 2 or not parts[1].isdigit():
@@ -382,8 +404,8 @@ async def find_user(message: Message, db: Database) -> None:
 
 
 @router.message(Command("blockuser"))
-async def block_user_start(message: Message, state: FSMContext, db: Database) -> None:
-    if await deny_message(message, db, "users"):
+async def block_user_start(message: Message, state: FSMContext, db: Database, config: Config) -> None:
+    if await deny_message(message, db, "users", config):
         return
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) != 2 or not parts[1].isdigit():
@@ -400,8 +422,8 @@ async def block_user_start(message: Message, state: FSMContext, db: Database) ->
 
 
 @router.callback_query(F.data == "user:block:confirm")
-async def block_user_confirm(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
-    if await deny_callback(callback, db, "users"):
+async def block_user_confirm(callback: CallbackQuery, state: FSMContext, db: Database, config: Config) -> None:
+    if await deny_callback(callback, db, "users", config):
         return
     data = await state.get_data()
     target_id = data.get("target_id")
@@ -417,8 +439,8 @@ async def block_user_confirm(callback: CallbackQuery, state: FSMContext, db: Dat
 
 
 @router.message(Command("unblockuser"))
-async def unblock_user(message: Message, db: Database) -> None:
-    if await deny_message(message, db, "users"):
+async def unblock_user(message: Message, db: Database, config: Config) -> None:
+    if await deny_message(message, db, "users", config):
         return
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) != 2 or not parts[1].isdigit():
@@ -434,17 +456,20 @@ async def unblock_user(message: Message, db: Database) -> None:
 
 
 @router.message(F.text == "📨 Xabar yuborish")
-async def broadcast_start(message: Message, state: FSMContext, db: Database) -> None:
-    if await deny_message(message, db, "broadcast"):
+async def broadcast_start(message: Message, state: FSMContext, db: Database, config: Config, bot: Bot) -> None:
+    if await deny_message(message, db, "broadcast", config):
         return
     await state.clear()
     await state.set_state(Broadcast.message)
-    await message.answer("Barcha foydalanuvchilarga yuboriladigan xabarni (matn, rasm, video yoki boshqa media) yuboring:", reply_markup=cancel_menu())
+    await message.answer(
+        "Barcha foydalanuvchilarga yuboriladigan xabarni (matn, rasm, video yoki boshqa media) yuboring:",
+        reply_markup=cancel_menu(hide_keyboard=is_series_bot(bot, config)),
+    )
 
 
 @router.message(Broadcast.message)
-async def broadcast_preview(message: Message, state: FSMContext, db: Database) -> None:
-    if await deny_message(message, db, "broadcast"):
+async def broadcast_preview(message: Message, state: FSMContext, db: Database, config: Config) -> None:
+    if await deny_message(message, db, "broadcast", config):
         await state.clear()
         return
     await state.update_data(message_id=message.message_id, chat_id=message.chat.id, message_type=(message.content_type or "unknown"))
@@ -453,8 +478,8 @@ async def broadcast_preview(message: Message, state: FSMContext, db: Database) -
 
 
 @router.callback_query(F.data == "broadcast:send")
-async def broadcast_send(callback: CallbackQuery, state: FSMContext, bot: Bot, db: Database) -> None:
-    if await deny_callback(callback, db, "broadcast"):
+async def broadcast_send(callback: CallbackQuery, state: FSMContext, bot: Bot, db: Database, config: Config) -> None:
+    if await deny_callback(callback, db, "broadcast", config):
         return
     data = await state.get_data()
     if not data.get("message_id") or not data.get("chat_id"):
@@ -499,8 +524,8 @@ async def broadcast_send(callback: CallbackQuery, state: FSMContext, bot: Bot, d
 
 
 @router.message(F.text == "⚙️ Bot sozlamalari")
-async def settings_menu(message: Message, db: Database) -> None:
-    if await deny_message(message, db, "settings"):
+async def settings_menu(message: Message, db: Database, config: Config) -> None:
+    if await deny_message(message, db, "settings", config):
         return
     bot_enabled = await db.get_setting("bot_enabled", "1") == "1"
     await message.answer(
@@ -510,8 +535,8 @@ async def settings_menu(message: Message, db: Database) -> None:
 
 
 @router.message(F.text.startswith("/set_"))
-async def set_text_setting(message: Message, db: Database) -> None:
-    if await deny_message(message, db, "settings"):
+async def set_text_setting(message: Message, db: Database, config: Config) -> None:
+    if await deny_message(message, db, "settings", config):
         return
     command = (message.text or "").split(maxsplit=1)[0][5:]
     key = command
@@ -544,8 +569,8 @@ async def toggle_bot(message: Message, db: Database, config: Config) -> None:
 
 
 @router.message(F.text == "💳 To‘lov sozlamalari")
-async def payment_admin_menu(message: Message, db: Database) -> None:
-    if await deny_message(message, db, "payments"):
+async def payment_admin_menu(message: Message, db: Database, config: Config) -> None:
+    if await deny_message(message, db, "payments", config):
         return
     enabled = await db.get_setting("payments_enabled", "0") == "1"
     methods = json.loads(await db.get_setting("payment_methods", "[]"))
@@ -557,8 +582,8 @@ async def payment_admin_menu(message: Message, db: Database) -> None:
 
 
 @router.message(Command("payment_toggle"))
-async def payment_toggle(message: Message, db: Database) -> None:
-    if await deny_message(message, db, "payments"):
+async def payment_toggle(message: Message, db: Database, config: Config) -> None:
+    if await deny_message(message, db, "payments", config):
         return
     enabled = await db.get_setting("payments_enabled", "0") != "1"
     await db.set_setting("payments_enabled", "1" if enabled else "0")
@@ -567,8 +592,8 @@ async def payment_toggle(message: Message, db: Database) -> None:
 
 
 @router.message(Command("payment_price"))
-async def payment_price(message: Message, db: Database) -> None:
-    if await deny_message(message, db, "payments"):
+async def payment_price(message: Message, db: Database, config: Config) -> None:
+    if await deny_message(message, db, "payments", config):
         return
     parts = (message.text or "").split(maxsplit=1)
     try:
@@ -584,8 +609,8 @@ async def payment_price(message: Message, db: Database) -> None:
 
 
 @router.message(Command("payment_methods"))
-async def payment_methods(message: Message, db: Database) -> None:
-    if await deny_message(message, db, "payments"):
+async def payment_methods(message: Message, db: Database, config: Config) -> None:
+    if await deny_message(message, db, "payments", config):
         return
     parts = (message.text or "").split(maxsplit=1)
     methods = [item.strip()[:60] for item in parts[1].split(",") if item.strip()] if len(parts) > 1 else []
@@ -598,8 +623,8 @@ async def payment_methods(message: Message, db: Database) -> None:
 
 
 @router.message(Command("payment_instructions"))
-async def payment_instructions(message: Message, db: Database) -> None:
-    if await deny_message(message, db, "payments"):
+async def payment_instructions(message: Message, db: Database, config: Config) -> None:
+    if await deny_message(message, db, "payments", config):
         return
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) != 2 or len(parts[1]) > 2500:
@@ -611,8 +636,8 @@ async def payment_instructions(message: Message, db: Database) -> None:
 
 
 @router.message(Command("payments"))
-async def payment_history(message: Message, db: Database) -> None:
-    if await deny_message(message, db, "payments"):
+async def payment_history(message: Message, db: Database, config: Config) -> None:
+    if await deny_message(message, db, "payments", config):
         return
     rows = await db.fetchall("SELECT id,user_id,amount,payment_method,status,created_at FROM payments ORDER BY id DESC LIMIT 30")
     if not rows:
@@ -622,8 +647,8 @@ async def payment_history(message: Message, db: Database) -> None:
 
 
 @router.callback_query(F.data.startswith("payment:review:"))
-async def review_payment(callback: CallbackQuery, bot: Bot, db: Database) -> None:
-    if await deny_callback(callback, db, "payments"):
+async def review_payment(callback: CallbackQuery, bot: Bot, db: Database, config: Config) -> None:
+    if await deny_callback(callback, db, "payments", config):
         return
     parts = callback.data.split(":")
     if len(parts) != 4 or not parts[2].isdigit() or parts[3] not in {"approve", "reject"}:
@@ -650,12 +675,12 @@ async def review_payment(callback: CallbackQuery, bot: Bot, db: Database) -> Non
         logger.info("To‘lov natijasini foydalanuvchiga yetkazib bo‘lmadi: payment_id=%s", payment_id)
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer(f"{result_text} To‘lov #{payment_id}")
-    await callback.answer("Saqlandi.")
+    await callback.answer("✅ Saqlandi.")
 
 
 @router.message(F.text == "📊 Statistika")
-async def statistics(message: Message, db: Database) -> None:
-    if await deny_message(message, db, "stats"):
+async def statistics(message: Message, db: Database, config: Config) -> None:
+    if await deny_message(message, db, "stats", config):
         return
     stats = await db.fetchone(
         "SELECT (SELECT COUNT(*) FROM users) users_total, "
@@ -683,8 +708,8 @@ async def statistics(message: Message, db: Database) -> None:
 
 
 @router.message(F.text == "📝 Harakatlar tarixi")
-async def admin_history(message: Message, db: Database) -> None:
-    if await deny_message(message, db, "logs"):
+async def admin_history(message: Message, db: Database, config: Config) -> None:
+    if await deny_message(message, db, "logs", config):
         return
     rows = await db.fetchall("SELECT admin_id,action,details,created_at FROM admin_logs ORDER BY id DESC LIMIT 30")
     if not rows:

@@ -49,6 +49,26 @@ class Database:
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
+            CREATE TABLE IF NOT EXISTS series (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                extra_text TEXT NOT NULL DEFAULT '',
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS series_episodes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                series_id INTEGER NOT NULL REFERENCES series(id) ON DELETE CASCADE,
+                season_number INTEGER NOT NULL DEFAULT 1,
+                episode_number INTEGER NOT NULL,
+                file_id TEXT NOT NULL,
+                file_type TEXT NOT NULL DEFAULT 'video',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(series_id, season_number, episode_number)
+            );
             CREATE TABLE IF NOT EXISTS channels (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 channel_id INTEGER NOT NULL UNIQUE,
@@ -106,6 +126,7 @@ class Database:
         )
         await self.connection.commit()
         await self._migrate_movies()
+        await self._migrate_series()
 
     async def _migrate_movies(self) -> None:
         assert self.connection is not None
@@ -120,6 +141,36 @@ class Database:
         if "delivered" not in request_columns:
             await self.connection.execute("ALTER TABLE movie_requests ADD COLUMN delivered INTEGER NOT NULL DEFAULT 0")
         await self.connection.commit()
+
+    async def _migrate_series(self) -> None:
+        assert self.connection is not None
+        cursor = await self.connection.execute("PRAGMA table_info(series_episodes)")
+        columns = {row["name"] for row in await cursor.fetchall()}
+        if "season_number" in columns:
+            return
+        try:
+            await self.connection.execute("BEGIN")
+            await self.connection.execute("ALTER TABLE series_episodes RENAME TO series_episodes_legacy")
+            await self.connection.execute(
+                "CREATE TABLE series_episodes ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "series_id INTEGER NOT NULL REFERENCES series(id) ON DELETE CASCADE,"
+                "season_number INTEGER NOT NULL DEFAULT 1,"
+                "episode_number INTEGER NOT NULL,"
+                "file_id TEXT NOT NULL,"
+                "file_type TEXT NOT NULL DEFAULT 'video',"
+                "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+                "UNIQUE(series_id, season_number, episode_number))"
+            )
+            await self.connection.execute(
+                "INSERT INTO series_episodes(id,series_id,season_number,episode_number,file_id,file_type,created_at) "
+                "SELECT id,series_id,1,episode_number,file_id,file_type,created_at FROM series_episodes_legacy"
+            )
+            await self.connection.execute("DROP TABLE series_episodes_legacy")
+            await self.connection.commit()
+        except Exception:
+            await self.connection.rollback()
+            raise
 
     async def close(self) -> None:
         if self.connection is not None:
@@ -182,3 +233,71 @@ class Database:
             "INSERT INTO admin_logs(admin_id, action, details) VALUES(?, ?, ?)",
             (admin_id, action, details[:1000]),
         )
+
+    async def create_series(self, code: str, title: str, description: str, episodes: list[dict[str, Any]]) -> int:
+        if self.connection is None:
+            raise RuntimeError("Ma’lumotlar bazasi ulanmagan")
+        if not episodes or len(episodes) > 100:
+            raise ValueError("Serialda 1 dan 100 tagacha qism bo‘lishi kerak")
+        episode_keys = [(episode["season_number"], episode["episode_number"]) for episode in episodes]
+        if any(season < 1 or number < 1 for season, number in episode_keys):
+            raise ValueError("Bo‘lim va qism raqamlari musbat bo‘lishi kerak")
+        if len(set(episode_keys)) != len(episode_keys):
+            raise ValueError("Bo‘limdagi qism raqamlari takrorlanmasligi kerak")
+        async with self.lock:
+            try:
+                existing = await self.connection.execute(
+                    "SELECT code FROM movies WHERE code=? UNION ALL SELECT code FROM series WHERE code=? LIMIT 1",
+                    (code, code),
+                )
+                if await existing.fetchone():
+                    raise ValueError("Bu kod band")
+                cursor = await self.connection.execute(
+                    "INSERT INTO series(code,title,description) VALUES(?,?,?)",
+                    (code, title, description),
+                )
+                series_id = cursor.lastrowid
+                await self.connection.executemany(
+                    "INSERT INTO series_episodes(series_id,season_number,episode_number,file_id,file_type) VALUES(?,?,?,?,?)",
+                    [
+                        (
+                            series_id,
+                            episode["season_number"],
+                            episode["episode_number"],
+                            episode["file_id"],
+                            episode["file_type"],
+                        )
+                        for episode in episodes
+                    ],
+                )
+                await self.connection.commit()
+                return series_id
+            except Exception:
+                await self.connection.rollback()
+                raise
+
+    async def add_series_episode(
+        self,
+        series_id: int,
+        season_number: int,
+        episode_number: int,
+        file_id: str,
+        file_type: str,
+    ) -> int:
+        if self.connection is None:
+            raise RuntimeError("Ma’lumotlar bazasi ulanmagan")
+        if season_number < 1 or episode_number < 1:
+            raise ValueError("Bo‘lim va qism raqamlari musbat bo‘lishi kerak")
+        async with self.lock:
+            existing = await self.connection.execute(
+                "SELECT id FROM series_episodes WHERE series_id=? AND season_number=? AND episode_number=?",
+                (series_id, season_number, episode_number),
+            )
+            if await existing.fetchone():
+                raise ValueError("Bu bo‘limda bunday qism raqami bor")
+            await self.connection.execute(
+                "INSERT INTO series_episodes(series_id,season_number,episode_number,file_id,file_type) VALUES(?,?,?,?,?)",
+                (series_id, season_number, episode_number, file_id, file_type),
+            )
+            await self.connection.commit()
+            return episode_number
