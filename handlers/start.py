@@ -76,7 +76,7 @@ async def start_handler(message: Message, state: FSMContext, bot: Bot, db: Datab
         reply_markup=main_menu(
             user.id in config.admin_ids,
             await db.get_setting("payments_enabled", "0") == "1",
-            hide_keyboard=is_series_bot(bot, config),
+            hide_keyboard=is_series_bot(bot, config) and user.id not in config.admin_ids,
         ),
     )
 
@@ -91,7 +91,7 @@ async def subscription_check(callback: CallbackQuery, bot: Bot, db: Database, co
             reply_markup=main_menu(
                 callback.from_user.id in config.admin_ids,
                 await db.get_setting("payments_enabled", "0") == "1",
-                hide_keyboard=is_series_bot(bot, config),
+                hide_keyboard=is_series_bot(bot, config) and callback.from_user.id not in config.admin_ids,
             ),
         )
     else:

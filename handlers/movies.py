@@ -111,7 +111,7 @@ async def show_movie_menu(message: Message, db: Database, config: Config, bot: B
     menu_text = "🎬 Kinolarni boshqarish"
     if is_series_bot(bot, config):
         menu_text += "\nSerial buyruqlari: /addseries, /addseriesepisode, /series"
-    await message.answer(menu_text, reply_markup=movie_menu(hide_keyboard=is_series_bot(bot, config)))
+    await message.answer(menu_text, reply_markup=movie_menu())
 
 
 @router.message(F.text == "🎬 Kino qo‘shish")

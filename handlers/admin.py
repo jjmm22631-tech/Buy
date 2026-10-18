@@ -10,7 +10,7 @@ from aiogram.types import CallbackQuery, Message
 
 from config import Config
 from database import Database
-from handlers.common import can, deny_callback, deny_message, is_series_bot
+from handlers.common import can, deny_callback, deny_message
 from handlers.states import (
     AdminManage, Broadcast, ChannelManage, PaymentSetup, SettingEdit, UserManage,
 )
@@ -73,7 +73,7 @@ async def seed_admins(db: Database, config: Config) -> None:
 
 @router.message(Command("admin"))
 @router.message(F.text == "🛠 Admin paneli")
-async def open_admin(message: Message, db: Database, config: Config, bot: Bot) -> None:
+async def open_admin(message: Message, db: Database, config: Config) -> None:
     if message.from_user.id not in config.admin_ids:
         await message.answer("⛔ Admin paneli faqat adminlar uchun.")
         return
@@ -81,36 +81,36 @@ async def open_admin(message: Message, db: Database, config: Config, bot: Bot) -
 
 
 @router.message(F.text == "🔙 Orqaga")
-async def back_to_main(message: Message, db: Database, config: Config, bot: Bot) -> None:
+async def back_to_main(message: Message, db: Database, config: Config) -> None:
     await message.answer(
         "Asosiy menyu",
         reply_markup=main_menu(
             message.from_user.id in config.admin_ids,
             await db.get_setting("payments_enabled", "0") == "1",
-            hide_keyboard=is_series_bot(bot, config),
+            hide_keyboard=message.from_user.id not in config.admin_ids,
         ),
     )
 
 
 @router.message(Command("cancel"))
 @router.message(F.text == "❌ Bekor qilish")
-async def cancel_state(message: Message, state: FSMContext, db: Database, config: Config, bot: Bot) -> None:
+async def cancel_state(message: Message, state: FSMContext, db: Database, config: Config) -> None:
     current = await state.get_state()
     await state.clear()
     if message.from_user.id in config.admin_ids:
-        await message.answer("❌ Jarayon bekor qilindi.", reply_markup=admin_menu(hide_keyboard=is_series_bot(bot, config)))
+        await message.answer("❌ Jarayon bekor qilindi.", reply_markup=admin_menu())
     elif current:
         await message.answer("Jarayon bekor qilindi.")
 
 
 @router.message(F.text == "👑 Adminlar")
-async def admin_management_menu(message: Message, db: Database, config: Config, bot: Bot) -> None:
+async def admin_management_menu(message: Message, db: Database, config: Config) -> None:
     if message.from_user.id not in config.admin_ids:
         await message.answer("⛔ Adminlarni faqat asosiy admin boshqaradi.")
         return
     await message.answer(
         "👑 Adminlarni boshqarish\n\n➕ Admin qo‘shish: /addadmin\n➖ Admin o‘chirish: /removeadmin\n📋 Ro‘yxat: /admins\n🔍 ID orqali qidirish: /findadmin <ID>",
-        reply_markup=admin_menu(hide_keyboard=is_series_bot(bot, config)),
+        reply_markup=admin_menu(),
     )
 
 
@@ -119,13 +119,13 @@ async def is_owner(db: Database, config: Config, telegram_id: int) -> bool:
 
 
 @router.message(Command("addadmin"))
-async def add_admin_start(message: Message, state: FSMContext, db: Database, config: Config, bot: Bot) -> None:
+async def add_admin_start(message: Message, state: FSMContext, db: Database, config: Config) -> None:
     if not await is_owner(db, config, message.from_user.id):
         await message.answer("⛔ Faqat asosiy admin admin qo‘sha oladi.")
         return
     await state.clear()
     await state.set_state(AdminManage.add_id)
-    await message.answer("Yangi adminning Telegram ID raqamini yuboring:", reply_markup=cancel_menu(hide_keyboard=is_series_bot(bot, config)))
+    await message.answer("Yangi adminning Telegram ID raqamini yuboring:", reply_markup=cancel_menu())
 
 
 @router.message(AdminManage.add_id)
@@ -166,13 +166,13 @@ async def add_admin_confirm(callback: CallbackQuery, state: FSMContext, db: Data
 
 
 @router.message(Command("removeadmin"))
-async def remove_admin_start(message: Message, state: FSMContext, db: Database, config: Config, bot: Bot) -> None:
+async def remove_admin_start(message: Message, state: FSMContext, db: Database, config: Config) -> None:
     if not await is_owner(db, config, message.from_user.id):
         await message.answer("⛔ Faqat asosiy admin admin o‘chira oladi.")
         return
     await state.clear()
     await state.set_state(AdminManage.remove_id)
-    await message.answer("O‘chiriladigan adminning Telegram ID raqamini yuboring:", reply_markup=cancel_menu(hide_keyboard=is_series_bot(bot, config)))
+    await message.answer("O‘chiriladigan adminning Telegram ID raqamini yuboring:", reply_markup=cancel_menu())
 
 
 @router.message(AdminManage.remove_id)
@@ -463,7 +463,7 @@ async def broadcast_start(message: Message, state: FSMContext, db: Database, con
     await state.set_state(Broadcast.message)
     await message.answer(
         "Barcha foydalanuvchilarga yuboriladigan xabarni (matn, rasm, video yoki boshqa media) yuboring:",
-        reply_markup=cancel_menu(hide_keyboard=is_series_bot(bot, config)),
+        reply_markup=cancel_menu(),
     )
 
 

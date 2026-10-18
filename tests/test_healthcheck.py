@@ -3,6 +3,8 @@ import unittest
 
 from bot import _handle_healthcheck, healthcheck_response
 from handlers.start import DEFAULT_WELCOME, welcome_with_code_prompt
+from keyboards import admin_menu, main_menu, movie_menu
+from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
 
 
 class HealthcheckTests(unittest.TestCase):
@@ -19,6 +21,12 @@ class HealthcheckTests(unittest.TestCase):
     def test_start_welcome_always_requests_a_movie_code_without_duplicating_it(self) -> None:
         self.assertEqual(welcome_with_code_prompt("Salom"), "Salom\n\n🎬 Kino kodini yuboring.")
         self.assertEqual(welcome_with_code_prompt(DEFAULT_WELCOME), DEFAULT_WELCOME)
+
+    def test_second_bot_admin_menus_remain_visible(self) -> None:
+        self.assertIsInstance(main_menu(is_admin=True), ReplyKeyboardMarkup)
+        self.assertIsInstance(admin_menu(), ReplyKeyboardMarkup)
+        self.assertIsInstance(movie_menu(), ReplyKeyboardMarkup)
+        self.assertIsInstance(main_menu(is_admin=False, hide_keyboard=True), ReplyKeyboardRemove)
 
 
 class HealthcheckServerTests(unittest.IsolatedAsyncioTestCase):
