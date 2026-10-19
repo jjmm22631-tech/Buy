@@ -17,7 +17,16 @@ from handlers.common import can, deny_callback, deny_message
 from handlers.states import (
     AdminManage, Broadcast, ChannelManage, PaymentSetup, SettingEdit, UserManage,
 )
-from keyboards import admin_menu, cancel_menu, channel_management_keyboard, confirm_keyboard, main_menu
+from keyboards import (
+    admin_menu,
+    cancel_menu,
+    channel_add_type_keyboard,
+    channel_list_keyboard,
+    channel_management_keyboard,
+    confirm_keyboard,
+    main_menu,
+    private_chat_type_keyboard,
+)
 
 router = Router(name="admin")
 logger = logging.getLogger(__name__)
@@ -39,7 +48,7 @@ async def seed_admins(db: Database, config: Config) -> None:
         "welcome_text": "Assalomu alaykum! 👋\nUzbek Kinolar Olami botiga xush kelibsiz! 🎬\n\nSevimli kinolaringizni topish uchun kino kodini yuboring.",
         "series_welcome_text": "Assalomu alaykum! 👋\nUzbek Tarjima Serialar Olami botiga xush kelibsiz! 🎬\n\nSevimli serialaringizni topish uchun serial kodini yuboring.",
         "not_found_text": "❌ Bunday koddagi kino topilmadi.\n\nIltimos, kodni tekshirib qayta yuboring.",
-        "subscription_text": "❗ Botdan foydalanish uchun quyidagi kanal va guruhlarga obuna bo‘ling.",
+        "subscription_text": "👋 Botdan foydalanish uchun quyidagi kanal va guruhlarga obuna bo‘ling!",
         "subscription_enabled": "1",
         "bot_enabled": "1",
         "payments_enabled": "0",
@@ -50,7 +59,10 @@ async def seed_admins(db: Database, config: Config) -> None:
         "advertisement_text": "",
     }
     for key, value in defaults.items():
-        if await db.fetchone("SELECT id FROM settings WHERE key=?", (key,)) is None:
+        setting = await db.fetchone("SELECT value FROM settings WHERE key=?", (key,))
+        if setting is None:
+            await db.set_setting(key, value)
+        elif key == "subscription_text" and setting["value"] == "❗ Botdan foydalanish uchun quyidagi kanal va guruhlarga obuna bo‘ling.":
             await db.set_setting(key, value)
 
 
@@ -297,18 +309,140 @@ async def show_channel_management(message: Message, db: Database) -> None:
 
 
 async def channel_management_view(db: Database):
-    channels = await db.fetchall("SELECT * FROM channels WHERE is_active=1 ORDER BY id LIMIT 40")
     total = await db.fetchone("SELECT COUNT(*) AS total FROM channels WHERE is_active=1")
     enabled = await db.get_setting("subscription_enabled", "1") == "1"
-    lines = [
-        f"📋 Ulangan kanallar va guruhlar\n"
-        f"Majburiy obuna: {'yoqilgan' if enabled else 'o‘chirilgan'}\n\n"
-        f"Ulangan chatlar: {total['total']}\n\n"
-        "Ommaviy chat uchun @username/havola, maxfiy chat uchun chat ID’si yoki forward qilingan xabarni yuboring.\n"
-        "Bot har bir kanal yoki guruhda administrator bo‘lishi shart."
-        + ("\nO‘chirish tugmalari ro‘yxatdagi eng so‘nggi 40 ta chat uchun ko‘rsatilgan." if total["total"] > 40 else "")
+    text = (
+        "📢 Majburiy obuna boshqaruvi\n\n"
+        f"Holati: {'🟢 Yoqilgan' if enabled else '🔴 O‘chirilgan'}\n"
+        f"Ulangan kanal/guruhlar: {total['total']}\n\n"
+        "Obuna yoqilganda foydalanuvchi botdan foydalanishidan oldin barcha faol chatlarga a’zo bo‘lishi kerak."
+    )
+    return text, channel_management_keyboard(enabled, total["total"])
+
+
+async def channel_list_view(db: Database, page: int = 0):
+    page_size = 20
+    total = await db.fetchone("SELECT COUNT(*) AS total FROM channels WHERE is_active=1")
+    total_count = total["total"]
+    last_page = max(0, (total_count - 1) // page_size)
+    page = min(max(0, page), last_page)
+    channels = [
+        dict(row)
+        for row in await db.fetchall(
+            "SELECT * FROM channels WHERE is_active=1 ORDER BY id LIMIT ? OFFSET ?",
+            (page_size, page * page_size),
+        )
     ]
-    return "\n".join(lines), channel_management_keyboard([dict(row) for row in channels], enabled)
+    if not channels:
+        text = "📋 Ulangan kanallar va guruhlar\n\nHozircha chat ulanmagan."
+    else:
+        lines = ["📋 Ulangan kanallar va guruhlar", ""]
+        for index, channel in enumerate(channels, start=page * page_size + 1):
+            chat_type = "Kanal" if channel["chat_type"] == "channel" else "Guruh"
+            address = f"@{channel['channel_username']}" if channel.get("channel_username") else str(channel["channel_id"])
+            lines.append(
+                f"{index}. {(channel['title'] or 'Nomsiz chat')[:70]}\n"
+                f"   Turi: {chat_type} | Manzil: {address} | Holati: Ulangan"
+            )
+        lines.extend(["", f"Jami: {total_count} ta | Sahifa: {page + 1}/{last_page + 1}"])
+        text = "\n".join(lines)
+    return text, channel_list_keyboard(channels, page, total_count)
+
+
+async def show_channel_list(callback: CallbackQuery, db: Database, page: int = 0) -> None:
+    text, keyboard = await channel_list_view(db, page)
+    await callback.message.edit_text(text, reply_markup=keyboard)
+
+
+@router.callback_query(F.data == "channels:menu")
+async def open_channel_management_menu(callback: CallbackQuery, db: Database, config: Config) -> None:
+    if await deny_callback(callback, db, "channels", config):
+        return
+    text, keyboard = await channel_management_view(db)
+    await callback.message.edit_text(text, reply_markup=keyboard)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "channels:back")
+async def back_from_channel_management(callback: CallbackQuery, db: Database, config: Config) -> None:
+    if await deny_callback(callback, db, "channels", config):
+        return
+    await callback.message.edit_text("🔙 Majburiy obuna menyusidan chiqdingiz.")
+    await callback.message.answer("🛠 Boshqaruv paneli", reply_markup=admin_menu())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("channels:list:"))
+async def show_channels_list(callback: CallbackQuery, db: Database, config: Config) -> None:
+    if await deny_callback(callback, db, "channels", config):
+        return
+    parts = (callback.data or "").split(":")
+    if len(parts) != 3 or not parts[2].isdigit():
+        await callback.answer("Sahifa raqami noto‘g‘ri.", show_alert=True)
+        return
+    await show_channel_list(callback, db, int(parts[2]))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("channel:remove:"))
+async def remove_channel_from_list(callback: CallbackQuery, db: Database, config: Config) -> None:
+    if await deny_callback(callback, db, "channels", config):
+        return
+    parts = (callback.data or "").split(":")
+    if len(parts) != 4 or not parts[2].isdigit() or not parts[3].isdigit():
+        await callback.answer("Chat ma’lumoti noto‘g‘ri.", show_alert=True)
+        return
+    channel = await db.fetchone(
+        "SELECT channel_id,chat_type,title FROM channels WHERE id=? AND is_active=1",
+        (int(parts[2]),),
+    )
+    if not channel:
+        await callback.answer("Kanal yoki guruh topilmadi.", show_alert=True)
+        return
+    await db.execute("DELETE FROM channels WHERE channel_id=?", (channel["channel_id"],))
+    await db.log_admin(callback.from_user.id, f"{channel['chat_type']}_removed", str(channel["channel_id"]))
+    await show_channel_list(callback, db, int(parts[3]))
+    await callback.answer(f"✅ {channel['title'] or channel['channel_id']} o‘chirildi.")
+
+
+@router.callback_query(F.data == "channels:check")
+async def check_channel_configuration(callback: CallbackQuery, db: Database, config: Config, bot: Bot) -> None:
+    if await deny_callback(callback, db, "channels", config):
+        return
+    channels = await db.fetchall("SELECT channel_id,title FROM channels WHERE is_active=1 ORDER BY id")
+
+    async def check_chat(channel) -> tuple[bool, str | None]:
+        try:
+            async with semaphore:
+                member = await bot.get_chat_member(channel["channel_id"], bot.id)
+            if member.status in {"administrator", "creator"}:
+                return True, None
+            return False, f"• {channel['title'] or channel['channel_id']}: bot administrator emas"
+        except TelegramAPIError as error:
+            logger.warning(
+                "Majburiy obuna chatini tekshirib bo‘lmadi: chat_id=%s error=%s",
+                channel["channel_id"],
+                type(error).__name__,
+            )
+            return False, f"• {channel['title'] or channel['channel_id']}: tekshirib bo‘lmadi"
+
+    semaphore = asyncio.Semaphore(5)
+    checks = await asyncio.gather(*(check_chat(channel) for channel in channels))
+    admin_count = sum(is_admin for is_admin, _ in checks)
+    issues = [issue for _, issue in checks if issue]
+    status = await db.get_setting("subscription_enabled", "1") == "1"
+    text = (
+        f"🔄 Majburiy obuna: {'yoqilgan' if status else 'o‘chirilgan'}\n"
+        f"Ulangan chatlar: {len(channels)}\n"
+        f"🟢 Bot administrator: {admin_count}\n"
+        f"🔴 Muammo bor: {len(issues)}"
+    )
+    if issues:
+        text += "\n\n" + "\n".join(issues[:10])
+        if len(issues) > 10:
+            text += f"\n… yana {len(issues) - 10} ta muammo"
+    await callback.message.edit_text(text, reply_markup=channel_management_keyboard(status, len(channels)))
+    await callback.answer("Tekshiruv yakunlandi.")
 
 
 def public_chat_username(link: str) -> str | None:
@@ -340,6 +474,7 @@ def private_chat_invite_link(value: str) -> str | None:
 
 
 @router.callback_query(F.data.startswith("channel:add:"))
+@router.callback_query(F.data == "channel:add")
 async def start_add_channel_or_group(
     callback: CallbackQuery,
     state: FSMContext,
@@ -348,20 +483,46 @@ async def start_add_channel_or_group(
 ) -> None:
     if await deny_callback(callback, db, "channels", config):
         return
+    await state.clear()
     parts = (callback.data or "").split(":")
-    if len(parts) != 3 or parts[2] not in {"channel", "group"}:
+    if len(parts) == 2:
+        await callback.message.edit_text(
+            "➕ Qo‘shiladigan chat turini tanlang:",
+            reply_markup=channel_add_type_keyboard(),
+        )
+        await callback.answer()
+        return
+    if len(parts) == 3 and parts[2] == "private":
+        await callback.message.edit_text(
+            "🔒 Yopiq chat turini tanlang:",
+            reply_markup=private_chat_type_keyboard(),
+        )
+        await callback.answer()
+        return
+    if len(parts) == 4 and parts[2] in {"public", "private"} and parts[3] in {"channel", "group"}:
+        visibility, chat_type = parts[2], parts[3]
+    elif len(parts) == 3 and parts[2] in {"channel", "group"}:
+        visibility, chat_type = "public", parts[2]
+    else:
         await callback.answer("Noto‘g‘ri so‘rov.", show_alert=True)
         return
     await state.clear()
-    await state.update_data(chat_type=parts[2])
+    await state.update_data(chat_type=chat_type, visibility=visibility)
     await state.set_state(ChannelManage.add_link)
+    if visibility == "public":
+        prompt = (
+            f"📢 Ommaviy {'kanal' if chat_type == 'channel' else 'guruh'}ni qo‘shish uchun "
+            "@username yoki https://t.me/username havolasini yuboring."
+        )
+    else:
+        prompt = (
+            f"🔒 Yopiq {'kanal' if chat_type == 'channel' else 'guruh'}ni qo‘shish uchun chat ID’sini yuboring "
+            "yoki o‘sha chatdagi xabarni botga forward qiling.\n"
+            "Ixtiyoriy taklif havolasi bilan: `chat_id | https://t.me/+...` formatida yuboring. "
+            "Bot chat ID’siz taklif havolasini tekshira olmaydi."
+        )
     await callback.message.answer(
-        f"{'Kanal' if parts[2] == 'channel' else 'Guruh'}ni qo‘shish uchun ommaviy "
-        "@username/havolasini yoki chat ID’sini yuboring.\n"
-        "Maxfiy chat uchun chat ID’sini yuboring yoki o‘sha chatdagi xabarni botga forward qiling; "
-        "ixtiyoriy ravishda `chat_id | https://t.me/+taklif_havolasi` formatida yuborishingiz mumkin. "
-        "Havola ko‘rsatilmasa, bot o‘zi taklif havolasini yaratadi.\n"
-        "Bot o‘sha chatda administrator bo‘lishi kerak. Bekor qilish: /cancel"
+        f"{prompt}\nBot shu chatda administrator bo‘lishi kerak. Bekor qilish: /cancel"
     )
     await callback.answer()
 
@@ -396,6 +557,7 @@ async def save_linked_channel_or_group(
         return
     data = await state.get_data()
     expected_type = data.get("chat_type")
+    visibility = data.get("visibility", "public")
     if expected_type not in {"channel", "group"}:
         await state.clear()
         await message.answer("Qo‘shish jarayoni eskirgan. Menyudan qayta boshlang.")
@@ -409,9 +571,15 @@ async def save_linked_channel_or_group(
     if origin:
         forwarded_chat = getattr(origin, "chat", None) or getattr(origin, "sender_chat", None)
     username = public_chat_username(identifier)
+    if visibility == "public" and not username:
+        await message.answer("Ommaviy chat uchun @username yoki https://t.me/username havolasini yuboring:")
+        return
+    if visibility == "private" and username:
+        await message.answer("Yopiq chat uchun chat ID’sini yuboring yoki chatdagi xabarni forward qiling:")
+        return
     if forwarded_chat is not None:
         chat_id = forwarded_chat.id
-    elif username:
+    elif username and visibility == "public":
         chat_id = f"@{username}"
     elif identifier.lstrip("-").isdigit() and int(identifier) != 0:
         chat_id = int(identifier)
@@ -558,7 +726,8 @@ async def create_access_link(message: Message, db: Database, config: Config, bot
 async def channel_list(message: Message, db: Database, config: Config) -> None:
     if await deny_message(message, db, "channels", config):
         return
-    await show_channel_management(message, db)
+    text, keyboard = await channel_list_view(db)
+    await message.answer(text, reply_markup=keyboard)
 
 
 @router.callback_query(F.data.startswith("channel:delete:"))

@@ -4,12 +4,12 @@ from aiogram import Bot, F, Router
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, ChatJoinRequest, Message
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.exceptions import TelegramAPIError
 
 from config import Config
 from database import Database
 from handlers.common import is_second_bot, is_series_bot
-from keyboards import main_menu, personal_menu, subscription_keyboard
+from keyboards import empty_subscription_keyboard, main_menu, personal_menu, subscription_keyboard
 from telegram_commands import set_admin_commands
 
 router = Router(name="start")
@@ -21,7 +21,7 @@ DEFAULT_SERIES_WELCOME = (
     "Uzbek Tarjima Serialar Olami botiga xush kelibsiz! 🎬\n\n"
     "Sevimli serialaringizni topish uchun serial kodini yuboring."
 )
-DEFAULT_SUBSCRIPTION = "❗ Botdan foydalanish uchun quyidagi kanal va guruhlarga obuna bo‘ling."
+DEFAULT_SUBSCRIPTION = "👋 Botdan foydalanish uchun quyidagi kanal va guruhlarga obuna bo‘ling!"
 
 
 async def register_user(message: Message, db: Database) -> None:
@@ -37,16 +37,21 @@ async def subscription_status(bot: Bot, db: Database, user_id: int) -> tuple[boo
     enabled = await db.get_setting("subscription_enabled", "1") == "1"
     channels = [dict(row) for row in await db.fetchall("SELECT * FROM channels WHERE is_active=1 ORDER BY id")]
     if not enabled or not channels:
-        return True, channels
+        return True, []
+    missing = []
     for channel in channels:
         try:
             member = await bot.get_chat_member(channel["channel_id"], user_id)
             if member.status in {"left", "kicked"} or (member.status == "restricted" and not member.is_member):
-                return False, channels
-        except (TelegramBadRequest, TelegramForbiddenError) as error:
-            logger.warning("Kanal a’zoligini tekshirib bo‘lmadi: channel_id=%s error=%s", channel["channel_id"], type(error).__name__)
-            return False, channels
-    return True, channels
+                missing.append(channel)
+        except TelegramAPIError as error:
+            logger.warning(
+                "Kanal/guruh a’zoligini tekshirib bo‘lmadi: chat_id=%s error=%s",
+                channel["channel_id"],
+                type(error).__name__,
+            )
+            missing.append(channel)
+    return not missing, missing
 
 
 async def show_subscription_gate(message: Message, channels: list[dict], db: Database) -> None:
@@ -125,6 +130,7 @@ async def chat_join_request_handler(
 async def subscription_check(callback: CallbackQuery, bot: Bot, db: Database, config: Config) -> None:
     allowed, channels = await subscription_status(bot, db, callback.from_user.id)
     if allowed:
+        await callback.message.edit_text("✅ Barcha kanal va guruhlarga a’zolik tasdiqlandi.")
         await callback.answer("Obuna tasdiqlandi!")
         payments_enabled = await db.get_setting("payments_enabled", "0") == "1"
         await callback.message.answer(
@@ -137,8 +143,11 @@ async def subscription_check(callback: CallbackQuery, bot: Bot, db: Database, co
         )
         await callback.message.answer("Kerakli bo‘limni tanlang:", reply_markup=personal_menu())
     else:
-        await callback.answer("Hali barcha kanallarga obuna bo‘lmagansiz.", show_alert=True)
-        await callback.message.edit_reply_markup(reply_markup=subscription_keyboard(channels))
+        await callback.answer("A’zolik hali barcha chatlarda tasdiqlanmadi.", show_alert=True)
+        await callback.message.edit_text(
+            await db.get_setting("subscription_text", DEFAULT_SUBSCRIPTION),
+            reply_markup=subscription_keyboard(channels) if channels else empty_subscription_keyboard(),
+        )
 
 
 @router.callback_query(F.data == "noop")

@@ -10,17 +10,24 @@ from config import Config, _load_env_file
 from database import Database
 from handlers.admin import (
     create_access_link,
+    channel_list_view,
     private_chat_invite_link,
     public_chat_username,
     save_linked_channel_or_group,
 )
 from handlers.common import can
 from handlers.movies import _notify_episode_subscribers, is_series_bot
-from handlers.start import DEFAULT_SUBSCRIPTION, chat_join_request_handler, start_handler, subscription_status
+from handlers.start import (
+    DEFAULT_SUBSCRIPTION,
+    chat_join_request_handler,
+    start_handler,
+    subscription_check,
+    subscription_status,
+)
 from keyboards import (
-    admin_menu, cancel_menu, channel_management_keyboard, confirm_keyboard, main_menu, movie_menu,
-    series_delete_episodes_keyboard, series_episodes_keyboard, series_seasons_keyboard, subscription_keyboard,
-    title_search_keyboard,
+    admin_menu, cancel_menu, channel_add_type_keyboard, channel_management_keyboard, confirm_keyboard,
+    main_menu, movie_menu, private_chat_type_keyboard, series_delete_episodes_keyboard,
+    series_episodes_keyboard, series_seasons_keyboard, subscription_keyboard, title_search_keyboard,
 )
 from aiogram.types import ReplyKeyboardRemove
 from types import SimpleNamespace
@@ -271,7 +278,7 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
             answer=AsyncMock(),
         )
         state = SimpleNamespace(
-            get_data=AsyncMock(return_value={"chat_type": "group"}),
+            get_data=AsyncMock(return_value={"chat_type": "group", "visibility": "private"}),
             clear=AsyncMock(),
         )
         chat = SimpleNamespace(
@@ -319,7 +326,8 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
         allowed, channels = await subscription_status(bot, self.db, 2020)
 
         self.assertFalse(allowed)
-        self.assertEqual(len(channels), 2)
+        self.assertEqual(len(channels), 1)
+        self.assertEqual(channels[0]["channel_id"], -100456)
         self.assertEqual(
             [call.args for call in bot.get_chat_member.await_args_list],
             [(-100123, 2020), (-100456, 2020)],
@@ -332,6 +340,63 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(allowed)
         self.assertEqual(bot.get_chat_member.await_count, 2)
+
+    async def test_channel_list_includes_details_and_separate_delete_buttons(self) -> None:
+        await self.db.execute(
+            "INSERT INTO channels(channel_id,channel_username,invite_link,chat_type,title) VALUES(?,?,?,?,?)",
+            (-100123, "public_channel", "https://t.me/public_channel", "channel", "Ommaviy kanal"),
+        )
+        await self.db.execute(
+            "INSERT INTO channels(channel_id,channel_username,invite_link,chat_type,title) VALUES(?,?,?,?,?)",
+            (-100456, None, "https://t.me/+private-group", "group", "Yopiq guruh"),
+        )
+
+        text, keyboard = await channel_list_view(self.db)
+
+        self.assertIn("Ommaviy kanal", text)
+        self.assertIn("@public_channel", text)
+        self.assertIn("Kanal", text)
+        self.assertIn("Yopiq guruh", text)
+        self.assertIn("-100456", text)
+        self.assertIn("Guruh", text)
+        delete_buttons = [
+            button.callback_data
+            for row in keyboard.inline_keyboard
+            for button in row
+            if button.callback_data and button.callback_data.startswith("channel:remove:")
+        ]
+        self.assertEqual(delete_buttons, ["channel:remove:1:0", "channel:remove:2:0"])
+
+    async def test_subscription_check_refreshes_only_missing_chat_buttons(self) -> None:
+        await self.db.execute(
+            "INSERT INTO channels(channel_id,channel_username,invite_link,chat_type,title) VALUES(?,?,?,?,?)",
+            (-100123, None, "https://t.me/+private-channel", "channel", "Private channel"),
+        )
+        await self.db.execute(
+            "INSERT INTO channels(channel_id,channel_username,invite_link,chat_type,title) VALUES(?,?,?,?,?)",
+            (-100456, None, "https://t.me/+private-group", "group", "Private group"),
+        )
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=2022),
+            message=SimpleNamespace(edit_text=AsyncMock(), answer=AsyncMock()),
+            answer=AsyncMock(),
+        )
+        bot = SimpleNamespace(
+            get_chat_member=AsyncMock(
+                side_effect=[
+                    SimpleNamespace(status="member", is_member=True),
+                    SimpleNamespace(status="left", is_member=False),
+                ]
+            )
+        )
+        config = Config("token", ("token",), 1001, (1001,), "db.sqlite3", "INFO")
+
+        await subscription_check(callback, bot, self.db, config)
+
+        markup = callback.message.edit_text.await_args.kwargs["reply_markup"]
+        self.assertEqual(len(markup.inline_keyboard), 2)
+        self.assertEqual(markup.inline_keyboard[0][0].url, "https://t.me/+private-group")
+        self.assertEqual(markup.inline_keyboard[0][0].text, "👥 1-guruhga qo‘shilish")
 
     async def test_start_shows_subscription_gate_until_user_joins_required_chat(self) -> None:
         await self.db.execute(
@@ -435,17 +500,36 @@ class MainMenuTests(unittest.TestCase):
 
     def test_channel_management_lists_entries_and_add_actions(self) -> None:
         keyboard = channel_management_keyboard(
-            [{"id": 2, "title": "Kanal", "channel_id": -1002}],
             enabled=True,
+            channel_count=1,
         )
         buttons = [button for row in keyboard.inline_keyboard for button in row]
         callbacks = {button.callback_data for button in buttons}
         labels = {button.text for button in buttons}
 
-        self.assertIn("channel:delete:2", callbacks)
-        self.assertIn("channel:add:channel", callbacks)
-        self.assertIn("channel:add:group", callbacks)
+        self.assertIn("channel:add", callbacks)
+        self.assertIn("channels:list:0", callbacks)
+        self.assertIn("channels:check", callbacks)
+        self.assertIn("channels:back", callbacks)
         self.assertTrue(any("Majburiy obunani o‘chirish" in label for label in labels))
+
+    def test_channel_add_flow_offers_public_and_private_chat_types(self) -> None:
+        public_labels = {
+            button.text
+            for row in channel_add_type_keyboard().inline_keyboard
+            for button in row
+        }
+        private_labels = {
+            button.text
+            for row in private_chat_type_keyboard().inline_keyboard
+            for button in row
+        }
+
+        self.assertIn("📢 Ommaviy kanal", public_labels)
+        self.assertIn("👥 Ommaviy guruh", public_labels)
+        self.assertIn("🔒 Yopiq kanal/guruh", public_labels)
+        self.assertIn("📢 Yopiq kanal", private_labels)
+        self.assertIn("👥 Yopiq guruh", private_labels)
 
     def test_subscription_keyboard_displays_channel_and_group_invites(self) -> None:
         keyboard = subscription_keyboard([
