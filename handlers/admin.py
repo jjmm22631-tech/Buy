@@ -35,7 +35,7 @@ EDITABLE_SETTINGS = {
     "welcome_text": "Kutib olish xabari",
     "series_welcome_text": "Serial botining kutib olish xabari",
     "not_found_text": "Kino topilmagandagi xabar",
-    "subscription_text": "Majburiy obuna matni",
+    "subscription_text": "Majburiy obuna matni (faqat shu bot uchun)",
     "support_username": "Qo‘llab-quvvatlash username'i",
     "advertisement_text": "Reklama matni",
 }
@@ -68,13 +68,16 @@ async def seed_admins(db: Database, config: Config) -> None:
 
 @router.message(Command("admin"))
 @router.message(F.text == "🛠 Admin paneli")
-async def open_admin(message: Message, db: Database, config: Config) -> None:
+async def open_admin(message: Message, db: Database, config: Config, bot: Bot) -> None:
     if message.from_user.id not in config.admin_ids:
         await message.answer("⛔ Admin paneli faqat adminlar uchun.")
         return
     bot_enabled = await db.get_setting("bot_enabled", "1") == "1"
-    subscription_enabled = await db.get_setting("subscription_enabled", "1") == "1"
-    channels = await db.fetchone("SELECT COUNT(*) AS total FROM channels WHERE is_active=1")
+    subscription_enabled = await db.get_bot_setting("subscription_enabled", bot.id, "1") == "1"
+    channels = await db.fetchone(
+        "SELECT COUNT(*) AS total FROM bot_channels WHERE bot_id=? AND is_active=1",
+        (bot.id,),
+    )
     if not bot_enabled:
         bot_status = "🔴 Bot: o‘chirilgan"
     else:
@@ -297,20 +300,23 @@ async def cancel_inline(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.message(F.text == "📢 Majburiy obuna")
-async def channels_menu(message: Message, db: Database, config: Config) -> None:
+async def channels_menu(message: Message, db: Database, config: Config, bot: Bot) -> None:
     if await deny_message(message, db, "channels", config):
         return
-    await show_channel_management(message, db)
+    await show_channel_management(message, db, bot.id)
 
 
-async def show_channel_management(message: Message, db: Database) -> None:
-    text, keyboard = await channel_management_view(db)
+async def show_channel_management(message: Message, db: Database, bot_id: int) -> None:
+    text, keyboard = await channel_management_view(db, bot_id)
     await message.answer(text, reply_markup=keyboard)
 
 
-async def channel_management_view(db: Database):
-    total = await db.fetchone("SELECT COUNT(*) AS total FROM channels WHERE is_active=1")
-    enabled = await db.get_setting("subscription_enabled", "1") == "1"
+async def channel_management_view(db: Database, bot_id: int):
+    total = await db.fetchone(
+        "SELECT COUNT(*) AS total FROM bot_channels WHERE bot_id=? AND is_active=1",
+        (bot_id,),
+    )
+    enabled = await db.get_bot_setting("subscription_enabled", bot_id, "1") == "1"
     text = (
         "📢 Majburiy obuna boshqaruvi\n\n"
         f"Holati: {'🟢 Yoqilgan' if enabled else '🔴 O‘chirilgan'}\n"
@@ -320,17 +326,20 @@ async def channel_management_view(db: Database):
     return text, channel_management_keyboard(enabled, total["total"])
 
 
-async def channel_list_view(db: Database, page: int = 0):
+async def channel_list_view(db: Database, bot_id: int, page: int = 0):
     page_size = 20
-    total = await db.fetchone("SELECT COUNT(*) AS total FROM channels WHERE is_active=1")
+    total = await db.fetchone(
+        "SELECT COUNT(*) AS total FROM bot_channels WHERE bot_id=? AND is_active=1",
+        (bot_id,),
+    )
     total_count = total["total"]
     last_page = max(0, (total_count - 1) // page_size)
     page = min(max(0, page), last_page)
     channels = [
         dict(row)
         for row in await db.fetchall(
-            "SELECT * FROM channels WHERE is_active=1 ORDER BY id LIMIT ? OFFSET ?",
-            (page_size, page * page_size),
+            "SELECT * FROM bot_channels WHERE bot_id=? AND is_active=1 ORDER BY id LIMIT ? OFFSET ?",
+            (bot_id, page_size, page * page_size),
         )
     ]
     if not channels:
@@ -349,16 +358,16 @@ async def channel_list_view(db: Database, page: int = 0):
     return text, channel_list_keyboard(channels, page, total_count)
 
 
-async def show_channel_list(callback: CallbackQuery, db: Database, page: int = 0) -> None:
-    text, keyboard = await channel_list_view(db, page)
+async def show_channel_list(callback: CallbackQuery, db: Database, bot_id: int, page: int = 0) -> None:
+    text, keyboard = await channel_list_view(db, bot_id, page)
     await callback.message.edit_text(text, reply_markup=keyboard)
 
 
 @router.callback_query(F.data == "channels:menu")
-async def open_channel_management_menu(callback: CallbackQuery, db: Database, config: Config) -> None:
+async def open_channel_management_menu(callback: CallbackQuery, db: Database, config: Config, bot: Bot) -> None:
     if await deny_callback(callback, db, "channels", config):
         return
-    text, keyboard = await channel_management_view(db)
+    text, keyboard = await channel_management_view(db, bot.id)
     await callback.message.edit_text(text, reply_markup=keyboard)
     await callback.answer()
 
@@ -373,19 +382,19 @@ async def back_from_channel_management(callback: CallbackQuery, db: Database, co
 
 
 @router.callback_query(F.data.startswith("channels:list:"))
-async def show_channels_list(callback: CallbackQuery, db: Database, config: Config) -> None:
+async def show_channels_list(callback: CallbackQuery, db: Database, config: Config, bot: Bot) -> None:
     if await deny_callback(callback, db, "channels", config):
         return
     parts = (callback.data or "").split(":")
     if len(parts) != 3 or not parts[2].isdigit():
         await callback.answer("Sahifa raqami noto‘g‘ri.", show_alert=True)
         return
-    await show_channel_list(callback, db, int(parts[2]))
+    await show_channel_list(callback, db, bot.id, int(parts[2]))
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("channel:remove:"))
-async def remove_channel_from_list(callback: CallbackQuery, db: Database, config: Config) -> None:
+async def remove_channel_from_list(callback: CallbackQuery, db: Database, config: Config, bot: Bot) -> None:
     if await deny_callback(callback, db, "channels", config):
         return
     parts = (callback.data or "").split(":")
@@ -393,15 +402,18 @@ async def remove_channel_from_list(callback: CallbackQuery, db: Database, config
         await callback.answer("Chat ma’lumoti noto‘g‘ri.", show_alert=True)
         return
     channel = await db.fetchone(
-        "SELECT channel_id,chat_type,title FROM channels WHERE id=? AND is_active=1",
-        (int(parts[2]),),
+        "SELECT channel_id,chat_type,title FROM bot_channels WHERE id=? AND bot_id=? AND is_active=1",
+        (int(parts[2]), bot.id),
     )
     if not channel:
         await callback.answer("Kanal yoki guruh topilmadi.", show_alert=True)
         return
-    await db.execute("DELETE FROM channels WHERE channel_id=?", (channel["channel_id"],))
+    await db.execute(
+        "DELETE FROM bot_channels WHERE channel_id=? AND bot_id=?",
+        (channel["channel_id"], bot.id),
+    )
     await db.log_admin(callback.from_user.id, f"{channel['chat_type']}_removed", str(channel["channel_id"]))
-    await show_channel_list(callback, db, int(parts[3]))
+    await show_channel_list(callback, db, bot.id, int(parts[3]))
     await callback.answer(f"✅ {channel['title'] or channel['channel_id']} o‘chirildi.")
 
 
@@ -409,7 +421,10 @@ async def remove_channel_from_list(callback: CallbackQuery, db: Database, config
 async def check_channel_configuration(callback: CallbackQuery, db: Database, config: Config, bot: Bot) -> None:
     if await deny_callback(callback, db, "channels", config):
         return
-    channels = await db.fetchall("SELECT channel_id,title FROM channels WHERE is_active=1 ORDER BY id")
+    channels = await db.fetchall(
+        "SELECT channel_id,title FROM bot_channels WHERE bot_id=? AND is_active=1 ORDER BY id",
+        (bot.id,),
+    )
 
     async def check_chat(channel) -> tuple[bool, str | None]:
         try:
@@ -430,7 +445,7 @@ async def check_channel_configuration(callback: CallbackQuery, db: Database, con
     checks = await asyncio.gather(*(check_chat(channel) for channel in channels))
     admin_count = sum(is_admin for is_admin, _ in checks)
     issues = [issue for _, issue in checks if issue]
-    status = await db.get_setting("subscription_enabled", "1") == "1"
+    status = await db.get_bot_setting("subscription_enabled", bot.id, "1") == "1"
     text = (
         f"🔄 Majburiy obuna: {'yoqilgan' if status else 'o‘chirilgan'}\n"
         f"Ulangan chatlar: {len(channels)}\n"
@@ -480,6 +495,7 @@ async def start_add_channel_or_group(
     state: FSMContext,
     db: Database,
     config: Config,
+    bot: Bot,
 ) -> None:
     if await deny_callback(callback, db, "channels", config):
         return
@@ -532,14 +548,15 @@ async def toggle_subscription_from_menu(
     callback: CallbackQuery,
     db: Database,
     config: Config,
+    bot: Bot,
 ) -> None:
     if await deny_callback(callback, db, "channels", config):
         return
-    current = await db.get_setting("subscription_enabled", "1") == "1"
+    current = await db.get_bot_setting("subscription_enabled", bot.id, "1") == "1"
     value = "0" if current else "1"
-    await db.set_setting("subscription_enabled", value)
+    await db.set_bot_setting("subscription_enabled", bot.id, value)
     await db.log_admin(callback.from_user.id, "subscription_toggled", value)
-    text, keyboard = await channel_management_view(db)
+    text, keyboard = await channel_management_view(db, bot.id)
     await callback.message.edit_text(text, reply_markup=keyboard)
     await callback.answer(f"Majburiy obuna {'yoqildi' if value == '1' else 'o‘chirildi'}.")
 
@@ -633,10 +650,11 @@ async def save_linked_channel_or_group(
         invite_link = invite.invite_link
     try:
         await db.execute(
-            "INSERT INTO channels(channel_id,channel_username,invite_link,chat_type,title) VALUES(?,?,?,?,?) "
-            "ON CONFLICT(channel_id) DO UPDATE SET channel_username=excluded.channel_username,"
-            "invite_link=excluded.invite_link,chat_type=excluded.chat_type,title=excluded.title,is_active=1",
-            (chat.id, chat_username, invite_link, actual_type, chat_title),
+            "INSERT INTO bot_channels(bot_id,channel_id,channel_username,invite_link,chat_type,title) "
+            "VALUES(?,?,?,?,?,?) ON CONFLICT(bot_id,channel_id) DO UPDATE SET "
+            "channel_username=excluded.channel_username,invite_link=excluded.invite_link,"
+            "chat_type=excluded.chat_type,title=excluded.title,is_active=1",
+            (bot.id, chat.id, chat_username, invite_link, actual_type, chat_title),
         )
     except sqlite3.IntegrityError as error:
         logger.warning("Chat ro‘yxatga qo‘shilmadi: chat_id=%s error=%s", chat.id, type(error).__name__)
@@ -645,7 +663,7 @@ async def save_linked_channel_or_group(
     await db.log_admin(message.from_user.id, f"{actual_type}_added", str(chat.id))
     await state.clear()
     await message.answer(f"✅ {chat_title} majburiy obuna ro‘yxatiga qo‘shildi.")
-    await show_channel_management(message, db)
+    await show_channel_management(message, db, bot.id)
 
 
 @router.message(Command("addchannel"))
@@ -670,10 +688,11 @@ async def add_channel(message: Message, db: Database, config: Config, bot: Bot) 
         return
     try:
         await db.execute(
-            "INSERT INTO channels(channel_id,channel_username,invite_link,chat_type,title) VALUES(?,?,?,'channel',?) "
-            "ON CONFLICT(channel_id) DO UPDATE SET channel_username=excluded.channel_username, "
-            "invite_link=excluded.invite_link,chat_type='channel',title=excluded.title,is_active=1",
-            (channel_id, username, link, chat.title or username or str(channel_id)),
+            "INSERT INTO bot_channels(bot_id,channel_id,channel_username,invite_link,chat_type,title) "
+            "VALUES(?,?,?,?,'channel',?) ON CONFLICT(bot_id,channel_id) DO UPDATE SET "
+            "channel_username=excluded.channel_username,invite_link=excluded.invite_link,"
+            "chat_type='channel',title=excluded.title,is_active=1",
+            (bot.id, channel_id, username, link, chat.title or username or str(channel_id)),
         )
     except sqlite3.IntegrityError as error:
         logger.warning("Kanal qo‘shilmadi: %s", type(error).__name__)
@@ -723,29 +742,35 @@ async def create_access_link(message: Message, db: Database, config: Config, bot
 
 
 @router.message(Command("channels"))
-async def channel_list(message: Message, db: Database, config: Config) -> None:
+async def channel_list(message: Message, db: Database, config: Config, bot: Bot) -> None:
     if await deny_message(message, db, "channels", config):
         return
-    text, keyboard = await channel_list_view(db)
+    text, keyboard = await channel_list_view(db, bot.id)
     await message.answer(text, reply_markup=keyboard)
 
 
 @router.callback_query(F.data.startswith("channel:delete:"))
-async def delete_linked_channel(callback: CallbackQuery, db: Database, config: Config) -> None:
+async def delete_linked_channel(callback: CallbackQuery, db: Database, config: Config, bot: Bot) -> None:
     if await deny_callback(callback, db, "channels", config):
         return
     parts = (callback.data or "").split(":")
     if len(parts) != 3 or not parts[2].isdigit():
         await callback.answer("Noto‘g‘ri so‘rov.", show_alert=True)
         return
-    channel = await db.fetchone("SELECT channel_id,chat_type,title FROM channels WHERE id=?", (int(parts[2]),))
+    channel = await db.fetchone(
+        "SELECT channel_id,chat_type,title FROM bot_channels WHERE id=? AND bot_id=?",
+        (int(parts[2]), bot.id),
+    )
     if not channel:
         await callback.answer("Kanal yoki guruh topilmadi.", show_alert=True)
         return
-    await db.execute("DELETE FROM channels WHERE id=?", (int(parts[2]),))
+    await db.execute(
+        "DELETE FROM bot_channels WHERE id=? AND bot_id=?",
+        (int(parts[2]), bot.id),
+    )
     await db.log_admin(callback.from_user.id, f"{channel['chat_type']}_removed", str(channel["channel_id"]))
     await callback.answer("Chat o‘chirildi.")
-    text, keyboard = await channel_management_view(db)
+    text, keyboard = await channel_management_view(db, bot.id)
     await callback.message.edit_text(
         f"✅ {channel['title'] or channel['channel_id']} o‘chirildi.\n\n{text}",
         reply_markup=keyboard,
@@ -753,14 +778,17 @@ async def delete_linked_channel(callback: CallbackQuery, db: Database, config: C
 
 
 @router.message(Command("delchannel"))
-async def delete_channel(message: Message, db: Database, config: Config) -> None:
+async def delete_channel(message: Message, db: Database, config: Config, bot: Bot) -> None:
     if await deny_message(message, db, "channels", config):
         return
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) != 2 or not parts[1].isdigit():
         await message.answer("Foydalanish: /delchannel <ro‘yxatdagi_ID>")
         return
-    result = await db.execute("DELETE FROM channels WHERE id=?", (int(parts[1]),))
+    result = await db.execute(
+        "DELETE FROM bot_channels WHERE id=? AND bot_id=?",
+        (int(parts[1]), bot.id),
+    )
     if not result:
         await message.answer("Kanal topilmadi.")
         return
@@ -769,12 +797,12 @@ async def delete_channel(message: Message, db: Database, config: Config) -> None
 
 
 @router.message(Command("subscription_toggle"))
-async def toggle_subscription(message: Message, db: Database, config: Config) -> None:
+async def toggle_subscription(message: Message, db: Database, config: Config, bot: Bot) -> None:
     if await deny_message(message, db, "channels", config):
         return
-    current = await db.get_setting("subscription_enabled", "1") == "1"
+    current = await db.get_bot_setting("subscription_enabled", bot.id, "1") == "1"
     value = "0" if current else "1"
-    await db.set_setting("subscription_enabled", value)
+    await db.set_bot_setting("subscription_enabled", bot.id, value)
     await db.log_admin(message.from_user.id, "subscription_toggled", value)
     await message.answer(f"✅ Majburiy obuna {'yoqildi' if value == '1' else 'o‘chirildi'}.")
 
@@ -955,7 +983,7 @@ async def settings_menu(message: Message, db: Database, config: Config) -> None:
 
 
 @router.message(F.text.startswith("/set_"))
-async def set_text_setting(message: Message, db: Database, config: Config) -> None:
+async def set_text_setting(message: Message, db: Database, config: Config, bot: Bot) -> None:
     if await deny_message(message, db, "settings", config):
         return
     command = (message.text or "").split(maxsplit=1)[0][5:]
@@ -971,7 +999,10 @@ async def set_text_setting(message: Message, db: Database, config: Config) -> No
     if len(value) > 3000:
         await message.answer("Matn 3000 belgidan oshmasin.")
         return
-    await db.set_setting(key, value)
+    if key == "subscription_text":
+        await db.set_bot_setting(key, bot.id, value)
+    else:
+        await db.set_setting(key, value)
     await db.log_admin(message.from_user.id, "setting_changed", key)
     await message.answer("✅ Sozlama yangilandi.")
 

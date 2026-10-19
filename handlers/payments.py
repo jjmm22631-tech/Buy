@@ -25,7 +25,7 @@ async def payment_start(message: Message, bot: Bot, db: Database) -> None:
         return
     allowed, channels = await subscription_status(bot, db, message.from_user.id)
     if not allowed:
-        await show_subscription_gate(message, channels, db)
+        await show_subscription_gate(message, channels, db, bot.id)
         return
     if await db.get_setting("payments_enabled", "0") != "1":
         await message.answer("To‘lov xizmati hozircha yoqilmagan.")
@@ -99,7 +99,7 @@ async def payment_proof(message: Message, state: FSMContext, db: Database, bot: 
     )
     await state.clear()
     review_markup = InlineKeyboardMarkup(inline_keyboard=[[
-        inline_button(text="✅ Tasdiqlash", callback_data=f"payment:review:{payment_id}:approve"),
+        inline_button(text="✅ Tasdiqlash", callback_data=f"payment:review:{payment_id}:approve", style="success"),
         inline_button(text="❌ Rad etish", callback_data=f"payment:review:{payment_id}:reject", style="danger"),
     ]])
     delivered = 0

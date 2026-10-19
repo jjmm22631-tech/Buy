@@ -140,8 +140,11 @@ async def help_handler(message: Message, db: Database) -> None:
 
 
 @router.message(F.text == "📢 Kanalimiz")
-async def channel_info(message: Message, db: Database) -> None:
-    channels = await db.fetchall("SELECT channel_username, invite_link FROM channels WHERE is_active=1 ORDER BY id")
+async def channel_info(message: Message, db: Database, bot: Bot) -> None:
+    channels = await db.fetchall(
+        "SELECT channel_username, invite_link FROM bot_channels WHERE bot_id=? AND is_active=1 ORDER BY id",
+        (bot.id,),
+    )
     links = [row["invite_link"] or (f"https://t.me/{row['channel_username'].lstrip('@')}" if row["channel_username"] else "") for row in channels]
     links = [link for link in links if link]
     await message.answer("📢 Kanalimiz:" + ("\n" + "\n".join(links) if links else "\nHozircha kanal havolasi sozlanmagan."))
@@ -910,7 +913,7 @@ async def select_movie_search_result(callback: CallbackQuery, bot: Bot, db: Data
     allowed, channels = await subscription_status(bot, db, callback.from_user.id)
     if not allowed:
         await callback.answer("Avval kanallarga obuna bo‘ling.", show_alert=True)
-        await show_subscription_gate(callback.message, channels, db)
+        await show_subscription_gate(callback.message, channels, db, bot.id)
         return
     movie_data = dict(movie)
     if not movie_data.get("extra_text"):
@@ -1164,7 +1167,7 @@ async def send_series_episode(callback: CallbackQuery, bot: Bot, db: Database, c
     allowed, channels = await subscription_status(bot, db, callback.from_user.id)
     if not allowed:
         await callback.answer("Avval kanallarga obuna bo‘ling.", show_alert=True)
-        await show_subscription_gate(callback.message, channels, db)
+        await show_subscription_gate(callback.message, channels, db, bot.id)
         return
     movie_data = dict(episode)
     movie_data["title"] = f"{episode['title']} | {episode['season_number']}-mavsum {episode['episode_number']}-qism"
@@ -1189,7 +1192,7 @@ async def movie_code_handler(message: Message, bot: Bot, db: Database, config: C
         return
     allowed, channels = await subscription_status(bot, db, message.from_user.id)
     if not allowed:
-        await show_subscription_gate(message, channels, db)
+        await show_subscription_gate(message, channels, db, bot.id)
         return
     await _lookup_movie(message, db, (message.text or "").strip(), bot, config)
 

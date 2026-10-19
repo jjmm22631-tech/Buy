@@ -8,7 +8,7 @@ def inline_button(
     *,
     callback_data: str | None = None,
     url: str | None = None,
-    style: Literal["primary", "success", "danger"] = "success",
+    style: Literal["primary", "success", "danger"] = "primary",
 ) -> InlineKeyboardButton:
     return InlineKeyboardButton(text=text, callback_data=callback_data, url=url, style=style)
 
@@ -144,7 +144,7 @@ def cancel_menu(hide_keyboard: bool = False) -> ReplyKeyboardMarkup | ReplyKeybo
 def confirm_keyboard(yes: str, no: str = "cancel") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[
-            inline_button(text="✅ Tasdiqlash", callback_data=yes),
+            inline_button(text="✅ Tasdiqlash", callback_data=yes, style="success"),
             inline_button(text="❌ Bekor qilish", callback_data=no, style="danger"),
         ]]
     )
@@ -158,14 +158,14 @@ def subscription_keyboard(channels: list[dict]) -> InlineKeyboardMarkup:
             label = "kanal" if channel.get("chat_type", "channel") == "channel" else "guruh"
             icon = "📢" if label == "kanal" else "👥"
             action = "obuna bo‘lish" if label == "kanal" else "qo‘shilish"
-            rows.append([inline_button(text=f"{icon} {index}-{label}ga {action}", url=link)])
-    rows.append([inline_button(text="✅ Obunani tekshirish", callback_data="subscription:check")])
+            rows.append([inline_button(text=f"{icon} {index}-{label}ga {action}", url=link, style="success")])
+    rows.append([inline_button(text="✅ Obunani tekshirish", callback_data="subscription:check", style="success")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def access_invite_keyboard(invite_link: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [inline_button(text="✅ Guruhga so‘rov yuborish", url=invite_link)],
+        [inline_button(text="✅ Guruhga so‘rov yuborish", url=invite_link, style="success")],
     ])
 
 
@@ -174,13 +174,14 @@ def channel_management_keyboard(
     channel_count: int,
 ) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [inline_button(text="➕ Kanal/guruh qo‘shish", callback_data="channel:add")],
+        [inline_button(text="➕ Kanal/guruh qo‘shish", callback_data="channel:add", style="success")],
         [inline_button(text=f"📋 Ulangan kanallar/guruhlar ({channel_count})", callback_data="channels:list:0")],
         [inline_button(text="🗑 Kanal/guruhni o‘chirish", callback_data="channels:list:0")],
-        [inline_button(text="🔄 Obunani tekshirish", callback_data="channels:check")],
+        [inline_button(text="🔄 Obunani tekshirish", callback_data="channels:check", style="success")],
         [inline_button(
             text=f"Majburiy obunani {'o‘chirish' if enabled else 'yoqish'}",
             callback_data="channel:toggle",
+            style="danger" if enabled else "success",
         )],
         [inline_button(text="🔙 Orqaga", callback_data="channels:back", style="primary")],
     ])

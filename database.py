@@ -91,6 +91,19 @@ class Database:
                 invite_link TEXT NOT NULL,
                 is_active INTEGER NOT NULL DEFAULT 1
             );
+            CREATE TABLE IF NOT EXISTS bot_channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bot_id INTEGER NOT NULL,
+                channel_id INTEGER NOT NULL,
+                channel_username TEXT,
+                invite_link TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                chat_type TEXT NOT NULL DEFAULT 'channel',
+                title TEXT NOT NULL DEFAULT '',
+                UNIQUE(bot_id, channel_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_bot_channels_active
+                ON bot_channels(bot_id, is_active, id);
             CREATE TABLE IF NOT EXISTS bot_access (
                 telegram_id INTEGER PRIMARY KEY,
                 source_chat_id INTEGER NOT NULL,
@@ -245,6 +258,35 @@ class Database:
     async def get_setting(self, key: str, default: str = "") -> str:
         row = await self.fetchone("SELECT value FROM settings WHERE key=?", (key,))
         return row["value"] if row else default
+
+    async def get_bot_setting(self, key: str, bot_id: int, default: str = "") -> str:
+        row = await self.fetchone("SELECT value FROM settings WHERE key=?", (f"{key}:{bot_id}",))
+        if row:
+            return row["value"]
+        return await self.get_setting(key, default)
+
+    async def set_bot_setting(self, key: str, bot_id: int, value: str) -> None:
+        await self.set_setting(f"{key}:{bot_id}", value)
+
+    async def migrate_legacy_channels(self, bot_id: int) -> None:
+        await self.execute(
+            "INSERT INTO bot_channels(bot_id,channel_id,channel_username,invite_link,is_active,chat_type,title) "
+            "SELECT ?,channel_id,channel_username,invite_link,is_active,chat_type,title FROM channels "
+            "WHERE 1 ON CONFLICT(bot_id,channel_id) DO NOTHING",
+            (bot_id,),
+        )
+
+    async def initialize_bot_subscription_settings(self, bot_id: int, inherit_legacy: bool) -> None:
+        defaults = {
+            "subscription_enabled": "1",
+            "subscription_text": "👋 Botdan foydalanish uchun quyidagi kanal va guruhlarga obuna bo‘ling!",
+        }
+        for key, default in defaults.items():
+            scoped_key = f"{key}:{bot_id}"
+            if await self.fetchone("SELECT id FROM settings WHERE key=?", (scoped_key,)):
+                continue
+            value = await self.get_setting(key, default) if inherit_legacy else default
+            await self.set_setting(scoped_key, value)
 
     async def grant_bot_access(self, telegram_id: int, source_chat_id: int) -> None:
         await self.execute(

@@ -179,6 +179,27 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
         }
         self.assertIn("chat_type", columns)
         self.assertIn("title", columns)
+        bot_columns = {
+            row["name"]
+            for row in await self.db.fetchall("PRAGMA table_info(bot_channels)")
+        }
+        self.assertIn("bot_id", bot_columns)
+
+    async def test_legacy_channels_migrate_to_primary_bot_only(self) -> None:
+        await self.db.execute(
+            "INSERT INTO channels(channel_id,channel_username,invite_link,chat_type,title) VALUES(?,?,?,?,?)",
+            (-100123, "legacy_channel", "https://t.me/legacy_channel", "channel", "Legacy"),
+        )
+
+        await self.db.migrate_legacy_channels(1001)
+        await self.db.initialize_bot_subscription_settings(1001, inherit_legacy=True)
+        await self.db.initialize_bot_subscription_settings(2002, inherit_legacy=False)
+
+        migrated = await self.db.fetchall("SELECT bot_id,channel_id FROM bot_channels")
+        self.assertEqual([(row["bot_id"], row["channel_id"]) for row in migrated], [(1001, -100123)])
+        await self.db.set_bot_setting("subscription_enabled", 1001, "0")
+        self.assertEqual(await self.db.get_bot_setting("subscription_enabled", 1001, "1"), "0")
+        self.assertEqual(await self.db.get_bot_setting("subscription_enabled", 2002, "1"), "1")
 
     async def test_legacy_channels_migrate_without_losing_rows(self) -> None:
         legacy_path = Path(self.temp_dir.name) / "legacy_channels.sqlite3"
@@ -299,7 +320,9 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
 
         await save_linked_channel_or_group(message, state, self.db, config, bot)
 
-        channel = await self.db.fetchone("SELECT * FROM channels WHERE channel_id=-100123")
+        channel = await self.db.fetchone(
+            "SELECT * FROM bot_channels WHERE bot_id=9001 AND channel_id=-100123"
+        )
         self.assertEqual(channel["chat_type"], "group")
         self.assertEqual(channel["invite_link"], "https://t.me/+private-group")
         bot.create_chat_invite_link.assert_awaited_once_with(chat_id=-100123)
@@ -307,14 +330,15 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_mandatory_subscription_requires_membership_in_every_chat(self) -> None:
         await self.db.execute(
-            "INSERT INTO channels(channel_id,channel_username,invite_link,chat_type,title) VALUES(?,?,?,?,?)",
-            (-100123, None, "https://t.me/+private-channel", "channel", "Private channel"),
+            "INSERT INTO bot_channels(bot_id,channel_id,channel_username,invite_link,chat_type,title) VALUES(?,?,?,?,?,?)",
+            (9002, -100123, None, "https://t.me/+private-channel", "channel", "Private channel"),
         )
         await self.db.execute(
-            "INSERT INTO channels(channel_id,channel_username,invite_link,chat_type,title) VALUES(?,?,?,?,?)",
-            (-100456, None, "https://t.me/+private-group", "group", "Private group"),
+            "INSERT INTO bot_channels(bot_id,channel_id,channel_username,invite_link,chat_type,title) VALUES(?,?,?,?,?,?)",
+            (9002, -100456, None, "https://t.me/+private-group", "group", "Private group"),
         )
         bot = SimpleNamespace(
+            id=9002,
             get_chat_member=AsyncMock(
                 side_effect=[
                     SimpleNamespace(status="member", is_member=True),
@@ -341,17 +365,49 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(allowed)
         self.assertEqual(bot.get_chat_member.await_count, 2)
 
-    async def test_channel_list_includes_details_and_separate_delete_buttons(self) -> None:
+    async def test_two_bots_use_independent_required_channels(self) -> None:
         await self.db.execute(
-            "INSERT INTO channels(channel_id,channel_username,invite_link,chat_type,title) VALUES(?,?,?,?,?)",
-            (-100123, "public_channel", "https://t.me/public_channel", "channel", "Ommaviy kanal"),
+            "INSERT INTO bot_channels(bot_id,channel_id,channel_username,invite_link,chat_type,title) "
+            "VALUES(?,?,?,?,?,?)",
+            (9101, -100101, "bot_one_channel", "https://t.me/bot_one_channel", "channel", "Bot one"),
         )
         await self.db.execute(
-            "INSERT INTO channels(channel_id,channel_username,invite_link,chat_type,title) VALUES(?,?,?,?,?)",
-            (-100456, None, "https://t.me/+private-group", "group", "Yopiq guruh"),
+            "INSERT INTO bot_channels(bot_id,channel_id,channel_username,invite_link,chat_type,title) "
+            "VALUES(?,?,?,?,?,?)",
+            (9102, -100202, "bot_two_channel", "https://t.me/bot_two_channel", "channel", "Bot two"),
+        )
+        await self.db.initialize_bot_subscription_settings(9101, inherit_legacy=False)
+        await self.db.initialize_bot_subscription_settings(9102, inherit_legacy=False)
+        bot_one = SimpleNamespace(
+            id=9101,
+            get_chat_member=AsyncMock(return_value=SimpleNamespace(status="left", is_member=False)),
+        )
+        bot_two = SimpleNamespace(
+            id=9102,
+            get_chat_member=AsyncMock(return_value=SimpleNamespace(status="member", is_member=True)),
         )
 
-        text, keyboard = await channel_list_view(self.db)
+        one_allowed, one_missing = await subscription_status(bot_one, self.db, 3001)
+        two_allowed, two_missing = await subscription_status(bot_two, self.db, 3001)
+
+        self.assertFalse(one_allowed)
+        self.assertEqual([chat["channel_id"] for chat in one_missing], [-100101])
+        self.assertTrue(two_allowed)
+        self.assertEqual(two_missing, [])
+        bot_one.get_chat_member.assert_awaited_once_with(-100101, 3001)
+        bot_two.get_chat_member.assert_awaited_once_with(-100202, 3001)
+
+    async def test_channel_list_includes_details_and_separate_delete_buttons(self) -> None:
+        await self.db.execute(
+            "INSERT INTO bot_channels(bot_id,channel_id,channel_username,invite_link,chat_type,title) VALUES(?,?,?,?,?,?)",
+            (9003, -100123, "public_channel", "https://t.me/public_channel", "channel", "Ommaviy kanal"),
+        )
+        await self.db.execute(
+            "INSERT INTO bot_channels(bot_id,channel_id,channel_username,invite_link,chat_type,title) VALUES(?,?,?,?,?,?)",
+            (9003, -100456, None, "https://t.me/+private-group", "group", "Yopiq guruh"),
+        )
+
+        text, keyboard = await channel_list_view(self.db, 9003)
 
         self.assertIn("Ommaviy kanal", text)
         self.assertIn("@public_channel", text)
@@ -369,12 +425,12 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_subscription_check_refreshes_only_missing_chat_buttons(self) -> None:
         await self.db.execute(
-            "INSERT INTO channels(channel_id,channel_username,invite_link,chat_type,title) VALUES(?,?,?,?,?)",
-            (-100123, None, "https://t.me/+private-channel", "channel", "Private channel"),
+            "INSERT INTO bot_channels(bot_id,channel_id,channel_username,invite_link,chat_type,title) VALUES(?,?,?,?,?,?)",
+            (9004, -100123, None, "https://t.me/+private-channel", "channel", "Private channel"),
         )
         await self.db.execute(
-            "INSERT INTO channels(channel_id,channel_username,invite_link,chat_type,title) VALUES(?,?,?,?,?)",
-            (-100456, None, "https://t.me/+private-group", "group", "Private group"),
+            "INSERT INTO bot_channels(bot_id,channel_id,channel_username,invite_link,chat_type,title) VALUES(?,?,?,?,?,?)",
+            (9004, -100456, None, "https://t.me/+private-group", "group", "Private group"),
         )
         callback = SimpleNamespace(
             from_user=SimpleNamespace(id=2022),
@@ -382,6 +438,7 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
             answer=AsyncMock(),
         )
         bot = SimpleNamespace(
+            id=9004,
             get_chat_member=AsyncMock(
                 side_effect=[
                     SimpleNamespace(status="member", is_member=True),
@@ -400,13 +457,14 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_start_shows_subscription_gate_until_user_joins_required_chat(self) -> None:
         await self.db.execute(
-            "INSERT INTO channels(channel_id,channel_username,invite_link,chat_type,title) VALUES(?,?,?,?,?)",
-            (-100123, None, "https://t.me/+private-channel", "channel", "Private channel"),
+            "INSERT INTO bot_channels(bot_id,channel_id,channel_username,invite_link,chat_type,title) VALUES(?,?,?,?,?,?)",
+            (9005, -100123, None, "https://t.me/+private-channel", "channel", "Private channel"),
         )
         user = SimpleNamespace(id=2021, full_name="Test User", username=None)
         message = SimpleNamespace(from_user=user, answer=AsyncMock())
         state = SimpleNamespace(clear=AsyncMock())
         bot = SimpleNamespace(
+            id=9005,
             token="test-token",
             get_chat_member=AsyncMock(return_value=SimpleNamespace(status="left", is_member=False)),
         )
@@ -481,7 +539,7 @@ class MainMenuTests(unittest.TestCase):
 
         self.assertEqual(keyboard.inline_keyboard[0][0].text, "📁 2-mavsum")
         self.assertEqual(keyboard.inline_keyboard[0][0].callback_data, "series:season:42:2")
-        self.assertEqual(keyboard.inline_keyboard[0][0].style, "success")
+        self.assertEqual(keyboard.inline_keyboard[0][0].style, "primary")
 
     def test_inline_confirmation_uses_success_and_danger_styles(self) -> None:
         buttons = confirm_keyboard("yes").inline_keyboard[0]

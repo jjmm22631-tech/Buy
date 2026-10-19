@@ -188,6 +188,12 @@ async def main() -> None:
         for bot in bots:
             await configure_commands(bot, config.admin_ids, series_enabled=True)
             identity = await bot.get_me()
+            if not bot_registry:
+                await db.migrate_legacy_channels(identity.id)
+            await db.initialize_bot_subscription_settings(
+                identity.id,
+                inherit_legacy=not bot_registry,
+            )
             bot_registry[identity.id] = bot
             logger.info("Bot ishga tushdi: @%s", identity.username)
         logger.info("Ownerlar soni: %s; botlar soni: %s", len(config.admin_ids), len(bots))

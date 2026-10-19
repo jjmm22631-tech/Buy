@@ -34,8 +34,14 @@ async def register_user(message: Message, db: Database) -> None:
 
 
 async def subscription_status(bot: Bot, db: Database, user_id: int) -> tuple[bool, list[dict]]:
-    enabled = await db.get_setting("subscription_enabled", "1") == "1"
-    channels = [dict(row) for row in await db.fetchall("SELECT * FROM channels WHERE is_active=1 ORDER BY id")]
+    enabled = await db.get_bot_setting("subscription_enabled", bot.id, "1") == "1"
+    channels = [
+        dict(row)
+        for row in await db.fetchall(
+            "SELECT * FROM bot_channels WHERE bot_id=? AND is_active=1 ORDER BY id",
+            (bot.id,),
+        )
+    ]
     if not enabled or not channels:
         return True, []
     missing = []
@@ -54,8 +60,8 @@ async def subscription_status(bot: Bot, db: Database, user_id: int) -> tuple[boo
     return not missing, missing
 
 
-async def show_subscription_gate(message: Message, channels: list[dict], db: Database) -> None:
-    text = await db.get_setting("subscription_text", DEFAULT_SUBSCRIPTION)
+async def show_subscription_gate(message: Message, channels: list[dict], db: Database, bot_id: int) -> None:
+    text = await db.get_bot_setting("subscription_text", bot_id, DEFAULT_SUBSCRIPTION)
     await message.answer(text, reply_markup=subscription_keyboard(channels))
 
 
@@ -88,7 +94,7 @@ async def start_handler(message: Message, state: FSMContext, bot: Bot, db: Datab
         return
     allowed, channels = await subscription_status(bot, db, user.id)
     if not allowed:
-        await show_subscription_gate(message, channels, db)
+        await show_subscription_gate(message, channels, db, bot.id)
         return
     welcome = await get_welcome(bot, db, config)
     payments_enabled = await db.get_setting("payments_enabled", "0") == "1"
@@ -145,7 +151,7 @@ async def subscription_check(callback: CallbackQuery, bot: Bot, db: Database, co
     else:
         await callback.answer("A’zolik hali barcha chatlarda tasdiqlanmadi.", show_alert=True)
         await callback.message.edit_text(
-            await db.get_setting("subscription_text", DEFAULT_SUBSCRIPTION),
+            await db.get_bot_setting("subscription_text", bot.id, DEFAULT_SUBSCRIPTION),
             reply_markup=subscription_keyboard(channels) if channels else empty_subscription_keyboard(),
         )
 
