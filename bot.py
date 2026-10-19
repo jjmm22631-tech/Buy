@@ -1,6 +1,9 @@
 import asyncio
+import fcntl
+import hashlib
 import logging
 import os
+import tempfile
 from typing import Any, Awaitable, Callable
 
 from aiogram import Bot, Dispatcher
@@ -89,6 +92,37 @@ class AvailabilityMiddleware(BaseMiddleware):
         return await handler(event, data)
 
 
+class PollingInstanceLock:
+    def __init__(self, tokens: tuple[str, ...]) -> None:
+        self.tokens = tokens
+        self._handles: list[Any] = []
+
+    def acquire(self) -> None:
+        try:
+            for token in self.tokens:
+                token_id = hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
+                path = os.path.join(tempfile.gettempdir(), f"kino-bot-polling-{token_id}.lock")
+                handle = open(path, "a", encoding="ascii")
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError as error:
+                    handle.close()
+                    raise RuntimeError(
+                        "Bu serverda bot tokeni bilan polling jarayoni allaqachon ishlayapti. "
+                        "Bitta bot tokeni uchun Render’da faqat bitta faol servis/instance qoldiring."
+                    ) from error
+                self._handles.append(handle)
+        except Exception:
+            self.release()
+            raise
+
+    def release(self) -> None:
+        while self._handles:
+            handle = self._handles.pop()
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            handle.close()
+
+
 async def configure_commands(bot: Bot, admin_ids: tuple[int, ...], series_enabled: bool = False) -> None:
     await bot.set_my_commands(public_commands())
     for admin_id in admin_ids:
@@ -104,6 +138,7 @@ async def main() -> None:
     logger = logging.getLogger("kino_bot")
     db = Database(config.database_path)
     bots = [Bot(token=token) for token in config.bot_tokens]
+    polling_lock = PollingInstanceLock(config.bot_tokens)
     dispatcher = Dispatcher(storage=MemoryStorage())
     dispatcher.update.outer_middleware(AvailabilityMiddleware())
     dispatcher.include_router(start.router)
@@ -114,6 +149,7 @@ async def main() -> None:
     health_server = None
 
     try:
+        polling_lock.acquire()
         await db.connect()
         await admin.seed_admins(db, config)
         bot_registry = {}
@@ -139,6 +175,7 @@ async def main() -> None:
         if health_server is not None:
             health_server.close()
             await health_server.wait_closed()
+        polling_lock.release()
         await db.close()
         await asyncio.gather(*(bot.session.close() for bot in bots), return_exceptions=True)
 

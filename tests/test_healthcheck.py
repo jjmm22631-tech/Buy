@@ -1,8 +1,9 @@
 import asyncio
+import tempfile
 import unittest
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
-from bot import _handle_healthcheck, healthcheck_response
+from bot import PollingInstanceLock, _handle_healthcheck, healthcheck_response
 from config import Config
 from handlers.common import is_second_bot
 from handlers.start import DEFAULT_SERIES_WELCOME, DEFAULT_WELCOME, get_welcome, welcome_with_code_prompt
@@ -11,6 +12,19 @@ from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
 
 
 class HealthcheckTests(unittest.TestCase):
+    def test_polling_instance_lock_rejects_duplicate_process_for_same_token(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch("bot.tempfile.gettempdir", return_value=directory):
+            first = PollingInstanceLock(("same-token",))
+            second = PollingInstanceLock(("same-token",))
+            first.acquire()
+            try:
+                with self.assertRaisesRegex(RuntimeError, "faqat bitta faol servis/instance"):
+                    second.acquire()
+            finally:
+                first.release()
+            second.acquire()
+            second.release()
+
     def test_root_and_health_paths_return_ok(self) -> None:
         for request_line in (b"GET / HTTP/1.1\r\n", b"GET /health HTTP/1.1\r\n", b"GET /health?source=render HTTP/1.1\r\n"):
             with self.subTest(request_line=request_line):

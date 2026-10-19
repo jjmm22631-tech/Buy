@@ -60,7 +60,23 @@ async def open_admin(message: Message, db: Database, config: Config) -> None:
     if message.from_user.id not in config.admin_ids:
         await message.answer("⛔ Admin paneli faqat adminlar uchun.")
         return
-    await message.answer("🛠 Boshqaruv paneli", reply_markup=admin_menu())
+    bot_enabled = await db.get_setting("bot_enabled", "1") == "1"
+    subscription_enabled = await db.get_setting("subscription_enabled", "1") == "1"
+    channels = await db.fetchone("SELECT COUNT(*) AS total FROM channels WHERE is_active=1")
+    if not bot_enabled:
+        bot_status = "🔴 Bot: o‘chirilgan"
+    else:
+        bot_status = "🟢 Bot: ishlayapti"
+    if not subscription_enabled:
+        subscription_status = "🟡 Majburiy obuna: o‘chirilgan"
+    elif channels["total"]:
+        subscription_status = f"🟢 Majburiy obuna: yoqilgan ({channels['total']} ta chat)"
+    else:
+        subscription_status = "🔴 Majburiy obuna yoqilgan, lekin kanal/guruh ulanmagan"
+    await message.answer(
+        f"🛠 Boshqaruv paneli\n\n{bot_status}\n{subscription_status}",
+        reply_markup=admin_menu(),
+    )
 
 
 @router.message(F.text == "🔙 Orqaga")

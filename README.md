@@ -47,7 +47,7 @@ Foydalanuvchi kino yoki serial kodini yoxud nomini yuborib qidiradi. Serial sahi
 python bot.py
 ```
 
-Bot long polling ishlatadi. Bir token bilan bir vaqtda faqat bitta polling jarayonini ishga tushiring. Har safar `/start` bosilganda oldingi suhbat bosqichi bekor qilinib, kino kodini yuborish so‘raladi. Adminlar `/admin` buyrug‘i orqali panelni ochadi. Kinolarni boshqarish menyusida qo‘shish, tahrirlash, qidirish, o‘chirish va ro‘yxat amallari mavjud. Kanal va foydalanuvchi boshqaruvi, broadcast, to‘lov va sozlamalar bo‘limlarida ko‘rsatilgan slash-buyruqlardan foydalaning.
+Bot long polling ishlatadi. Har bir bot tokeni uchun faqat bitta Render service/instance ishlating. Bir serverda tasodifan takroriy jarayon ishga tushsa, lokal lock uni to‘xtatadi. Bir nechta Render service alohida serverlarda ishlayotgan bo‘lsa, eski yoki takroriy service/instance’ni Render Dashboard’dan to‘xtating. Aks holda Telegram `TelegramConflictError` qaytarib, yangilanishlarni ikki jarayon o‘rtasida bo‘lib yuboradi. Har safar `/start` bosilganda oldingi suhbat bosqichi bekor qilinib, kino yoki serial kodi qayta so‘raladi. Adminlar `/admin` orqali panelni ochadi; panelda bot va majburiy obuna holati 🟢/🟡/🔴 belgilar bilan ko‘rsatiladi. Kinolar menyusida qo‘shish, tahrirlash, qidirish, o‘chirish va ro‘yxat amallari mavjud. Kanal va foydalanuvchi boshqaruvi, xabar yuborish, to‘lov va sozlamalar bo‘limlarida ko‘rsatilgan slash-buyruqlardan foydalaning.
 
 ## Majburiy obuna
 
