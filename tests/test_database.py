@@ -9,13 +9,16 @@ from unittest.mock import AsyncMock
 from config import Config, _load_env_file
 from database import Database
 from handlers.common import can
-from handlers.movies import is_series_bot
-from keyboards import admin_menu, cancel_menu, main_menu, movie_menu, series_episodes_keyboard, series_seasons_keyboard
+from handlers.movies import _notify_episode_subscribers, is_series_bot
+from keyboards import (
+    admin_menu, cancel_menu, main_menu, movie_menu, series_delete_episodes_keyboard,
+    series_episodes_keyboard, series_seasons_keyboard, title_search_keyboard,
+)
 from aiogram.types import ReplyKeyboardRemove
 from types import SimpleNamespace
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods import SetMyCommands
-from telegram_commands import set_admin_commands
+from telegram_commands import admin_commands, set_admin_commands
 
 
 class DatabaseTests(unittest.IsolatedAsyncioTestCase):
@@ -85,6 +88,52 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
         remaining = await self.db.fetchone("SELECT COUNT(*) AS total FROM series_episodes WHERE series_id=?", (series_id,))
         self.assertEqual(remaining["total"], 0)
 
+    async def test_series_favorites_and_subscriptions_are_saved_per_user(self) -> None:
+        series_id = await self.db.create_series(
+            "FAV1",
+            "Sevimli serial",
+            "",
+            [{"season_number": 1, "episode_number": 1, "file_id": "ep1", "file_type": "video"}],
+        )
+        user_id = await self.db.execute(
+            "INSERT INTO users(telegram_id,full_name) VALUES(?,?)",
+            (1002, "Viewer"),
+        )
+        await self.db.execute(
+            "INSERT INTO series_favorites(user_id,series_id) VALUES(?,?)",
+            (user_id, series_id),
+        )
+        await self.db.execute(
+            "INSERT INTO series_subscriptions(user_id,series_id,bot_id) VALUES(?,?,?)",
+            (user_id, series_id, 777),
+        )
+
+        favorite = await self.db.fetchone(
+            "SELECT series_id FROM series_favorites WHERE user_id=?",
+            (user_id,),
+        )
+        subscription = await self.db.fetchone(
+            "SELECT series_id,bot_id FROM series_subscriptions WHERE user_id=?",
+            (user_id,),
+        )
+        self.assertEqual(favorite["series_id"], series_id)
+        self.assertEqual((subscription["series_id"], subscription["bot_id"]), (series_id, 777))
+
+        sender = AsyncMock()
+        await _notify_episode_subscribers(
+            self.db,
+            series_id,
+            "Sevimli serial",
+            2,
+            1,
+            AsyncMock(),
+            {777: sender},
+        )
+        sender.send_message.assert_awaited_once_with(
+            1002,
+            "🔔 Yangi qism chiqdi!\nSevimli serial\n2-mavsum 1-qism",
+        )
+
     async def test_legacy_series_episodes_migrate_to_first_season(self) -> None:
         legacy_path = Path(self.temp_dir.name) / "legacy.sqlite3"
         with sqlite3.connect(legacy_path) as connection:
@@ -147,17 +196,18 @@ class MainMenuTests(unittest.TestCase):
 
         self.assertEqual(labels, {"🛠 Admin paneli"})
 
-    def test_series_controls_are_not_shown_in_movie_menu(self) -> None:
+    def test_series_controls_are_available_in_movie_menu(self) -> None:
         labels = {button.text for row in movie_menu().keyboard for button in row}
 
-        self.assertNotIn("📺 Serial qo‘shish", labels)
-        self.assertNotIn("➕ Serialga qism", labels)
-        self.assertNotIn("📋 Seriallar", labels)
+        self.assertIn("📺 Serial qo‘shish", labels)
+        self.assertIn("➕ Mavsum/qism qo‘shish", labels)
+        self.assertIn("🗑 Serial qismini o‘chirish", labels)
+        self.assertIn("📋 Seriallar", labels)
 
-    def test_series_features_are_bound_to_second_bot_token(self) -> None:
+    def test_series_features_are_enabled_for_each_configured_bot(self) -> None:
         config = Config("token-1", ("token-1", "token-2"), 1001, (1001,), "db.sqlite3", "INFO")
 
-        self.assertFalse(is_series_bot(SimpleNamespace(token="token-1"), config))
+        self.assertTrue(is_series_bot(SimpleNamespace(token="token-1"), config))
         self.assertTrue(is_series_bot(SimpleNamespace(token="token-2"), config))
 
     def test_episode_button_is_bound_to_lookup_request(self) -> None:
@@ -168,8 +218,26 @@ class MainMenuTests(unittest.TestCase):
     def test_season_button_leads_to_episode_selection(self) -> None:
         keyboard = series_seasons_keyboard([{"season_number": 2}], request_id=42)
 
-        self.assertEqual(keyboard.inline_keyboard[0][0].text, "📁 2-bo‘lim")
+        self.assertEqual(keyboard.inline_keyboard[0][0].text, "📁 2-mavsum")
         self.assertEqual(keyboard.inline_keyboard[0][0].callback_data, "series:season:42:2")
+
+    def test_series_actions_and_title_search_use_scoped_callbacks(self) -> None:
+        seasons = series_seasons_keyboard(
+            [{"season_number": 1}],
+            request_id=42,
+            series_id=8,
+            is_favorite=False,
+            subscribed=True,
+        )
+        self.assertEqual(seasons.inline_keyboard[0][0].callback_data, "series:season:42:1")
+        self.assertEqual(seasons.inline_keyboard[1][0].callback_data, "series:favorite:42:8")
+        self.assertEqual(seasons.inline_keyboard[1][1].callback_data, "series:subscribe:42:8")
+
+        search = title_search_keyboard([{"kind": "movie", "id": 3, "title": "Film"}], request_id=51)
+        self.assertEqual(search.inline_keyboard[0][0].callback_data, "search:movie:51:3")
+
+        delete = series_delete_episodes_keyboard([{"id": 9, "season_number": 2, "episode_number": 4}])
+        self.assertEqual(delete.inline_keyboard[0][0].callback_data, "series:deleteepisode:9")
 
 
 class ConfigTests(unittest.TestCase):
@@ -217,6 +285,12 @@ class ConfigTests(unittest.TestCase):
 
 
 class TelegramCommandTests(unittest.IsolatedAsyncioTestCase):
+    def test_series_and_user_commands_are_available_for_every_bot(self) -> None:
+        commands = {command.command for command in admin_commands(series_enabled=False)}
+
+        self.assertTrue({"addseries", "addseriesepisode", "deleteseriesepisode", "part", "series"} <= commands)
+        self.assertTrue({"search", "favorites", "subscriptions"} <= commands)
+
     async def test_missing_admin_chat_does_not_abort_command_setup(self) -> None:
         bot = SimpleNamespace(
             set_my_commands=AsyncMock(

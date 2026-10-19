@@ -9,7 +9,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from config import Config
 from database import Database
 from handlers.common import is_series_bot
-from keyboards import main_menu, subscription_keyboard
+from keyboards import main_menu, personal_menu, subscription_keyboard
 from telegram_commands import set_admin_commands
 
 router = Router(name="start")
@@ -71,14 +71,16 @@ async def start_handler(message: Message, state: FSMContext, bot: Bot, db: Datab
         await show_subscription_gate(message, channels, db)
         return
     welcome = welcome_with_code_prompt(await db.get_setting("welcome_text", DEFAULT_WELCOME))
+    payments_enabled = await db.get_setting("payments_enabled", "0") == "1"
     await message.answer(
         welcome,
         reply_markup=main_menu(
             user.id in config.admin_ids,
-            await db.get_setting("payments_enabled", "0") == "1",
-            hide_keyboard=is_series_bot(bot, config) and user.id not in config.admin_ids,
+            payments_enabled,
+            hide_keyboard=user.id not in config.admin_ids and not payments_enabled,
         ),
     )
+    await message.answer("Kerakli bo‘limni tanlang:", reply_markup=personal_menu())
 
 
 @router.callback_query(F.data == "subscription:check")
@@ -86,14 +88,16 @@ async def subscription_check(callback: CallbackQuery, bot: Bot, db: Database, co
     allowed, channels = await subscription_status(bot, db, callback.from_user.id)
     if allowed:
         await callback.answer("Obuna tasdiqlandi!")
+        payments_enabled = await db.get_setting("payments_enabled", "0") == "1"
         await callback.message.answer(
             welcome_with_code_prompt(await db.get_setting("welcome_text", DEFAULT_WELCOME)),
             reply_markup=main_menu(
                 callback.from_user.id in config.admin_ids,
-                await db.get_setting("payments_enabled", "0") == "1",
-                hide_keyboard=is_series_bot(bot, config) and callback.from_user.id not in config.admin_ids,
+                payments_enabled,
+                hide_keyboard=callback.from_user.id not in config.admin_ids and not payments_enabled,
             ),
         )
+        await callback.message.answer("Kerakli bo‘limni tanlang:", reply_markup=personal_menu())
     else:
         await callback.answer("Hali barcha kanallarga obuna bo‘lmagansiz.", show_alert=True)
         await callback.message.edit_reply_markup(reply_markup=subscription_keyboard(channels))

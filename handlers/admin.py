@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 
-from aiogram import BaseMiddleware, Bot, F, Router
+from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -26,28 +26,6 @@ EDITABLE_SETTINGS = {
     "support_username": "Qo‘llab-quvvatlash username'i",
     "advertisement_text": "Reklama matni",
 }
-
-
-class AdminAccessMiddleware(BaseMiddleware):
-    async def __call__(self, handler, event, data):
-        user = getattr(event, "from_user", None)
-        config: Config = data["config"]
-        if user and user.id not in config.admin_ids:
-            if isinstance(event, CallbackQuery):
-                await event.answer("⛔ Bu bo‘lim faqat adminlar uchun.", show_alert=True)
-            elif isinstance(event, Message):
-                text = (event.text or "").split(maxsplit=1)[0].split("@", 1)[0]
-                if event.text != "❌ Bekor qilish" and text != "/cancel":
-                    await event.answer("⛔ Bu bo‘lim faqat adminlar uchun.")
-                else:
-                    return await handler(event, data)
-            return None
-        return await handler(event, data)
-
-
-admin_access = AdminAccessMiddleware()
-router.message.outer_middleware(admin_access)
-router.callback_query.outer_middleware(admin_access)
 
 
 async def seed_admins(db: Database, config: Config) -> None:
@@ -82,12 +60,13 @@ async def open_admin(message: Message, db: Database, config: Config) -> None:
 
 @router.message(F.text == "🔙 Orqaga")
 async def back_to_main(message: Message, db: Database, config: Config) -> None:
+    payments_enabled = await db.get_setting("payments_enabled", "0") == "1"
     await message.answer(
         "Asosiy menyu",
         reply_markup=main_menu(
             message.from_user.id in config.admin_ids,
-            await db.get_setting("payments_enabled", "0") == "1",
-            hide_keyboard=message.from_user.id not in config.admin_ids,
+            payments_enabled,
+            hide_keyboard=message.from_user.id not in config.admin_ids and not payments_enabled,
         ),
     )
 

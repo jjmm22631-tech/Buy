@@ -10,6 +10,9 @@ logger = logging.getLogger(__name__)
 def public_commands() -> list[BotCommand]:
     return [
         BotCommand(command="start", description="Botni boshlash"),
+        BotCommand(command="search", description="Kino yoki serial qidirish"),
+        BotCommand(command="favorites", description="Sevimli seriallar"),
+        BotCommand(command="subscriptions", description="Serial obunalari"),
         BotCommand(command="cancel", description="Joriy amalni bekor qilish"),
     ]
 
@@ -18,15 +21,18 @@ def admin_commands(series_enabled: bool) -> list[BotCommand]:
     commands = [
         BotCommand(command="start", description="Botni boshlash"),
         BotCommand(command="admin", description="Admin paneli"),
+        BotCommand(command="search", description="Kino yoki serial qidirish"),
+        BotCommand(command="favorites", description="Sevimli seriallar"),
+        BotCommand(command="subscriptions", description="Serial obunalari"),
         BotCommand(command="cancel", description="Joriy amalni bekor qilish"),
     ]
-    if series_enabled:
-        commands.extend([
-            BotCommand(command="addseries", description="Serial qo‘shish"),
-            BotCommand(command="addseriesepisode", description="Serialga qism qo‘shish"),
-            BotCommand(command="part", description="Bo‘lim va qism raqamini belgilash"),
-            BotCommand(command="series", description="Seriallar ro‘yxati"),
-        ])
+    commands.extend([
+        BotCommand(command="addseries", description="Serial qo‘shish"),
+        BotCommand(command="addseriesepisode", description="Serialga qism qo‘shish"),
+        BotCommand(command="deleteseriesepisode", description="Serial qismini o‘chirish"),
+        BotCommand(command="part", description="Mavsum va qism raqamini belgilash"),
+        BotCommand(command="series", description="Seriallar ro‘yxati"),
+    ])
     return commands
 
 

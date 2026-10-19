@@ -33,9 +33,11 @@ Ikki Telegram botini bitta jarayonda ishga tushirish uchun Render Environment’
 
 Har bir admin bot buyruqlar ro‘yxatini olish uchun tegishli botga bir marta `/start` yuborishi kerak. Admin botni hali boshlamagan bo‘lsa, uning shaxsiy buyruqlari keyingi `/start` vaqtida o‘rnatiladi; bu holat botning ishga tushishini to‘xtatmaydi.
 
-## Ikkinchi botdagi seriallar
+## Seriallar, qidiruv va obunalar
 
-Serial funksiyalari faqat ikkinchi token (`BOT_TOKEN_2`, yoki ishga tushish tartibidagi ikkinchi token) uchun yoqiladi. Admin ikkinchi botda `/addseries` buyrug‘i bilan serial kodi, nomi va tavsifini kiritadi. Har bir video oldidan `/part <bo‘lim> <qism>` yuboradi (masalan, `/part 1 1`), so‘ng o‘sha qism videosini yuboradi; hammasi tugagach `/done` yozadi. `/addseriesepisode` mavjud serialga shu tartibda yangi bo‘lim/qismlar qo‘shadi, `/series` ro‘yxatni ko‘rsatadi. Foydalanuvchi serial kodini yuboradi, avval bo‘limni, keyin kerakli qismni tanlaydi va video botdan yuboriladi. Serial boshqaruvi pastki tugmali menyuda ko‘rsatilmaydi. Eski serial qismlari avtomatik ravishda 1-bo‘limga o‘tkaziladi.
+Serial funksiyalari barcha sozlangan botlarda ishlaydi va bitta SQLite bazasidan foydalanadi. Admin panelidagi **🎬 Kinolar** bo‘limidan serial qo‘shish, mavsum/qism qo‘shish, qism o‘chirish va seriallar ro‘yxati tugmalariga kiring; mos slash-buyruqlar ham ishlaydi. Har bir qism videosidan oldin `/part <mavsum> <qism>` yuboring (masalan, `/part 1 1`); yangi mavsum birinchi qismi qo‘shilganda avtomatik yaratiladi. Qismlar mavsum va qism raqami bo‘yicha tartiblanadi. Eski serial qismlari avtomatik ravishda 1-mavsumga o‘tkaziladi.
+
+Foydalanuvchi kino yoki serial kodini yoxud nomini yuborib qidiradi. Serial sahifasida ⭐ sevimlilarga saqlash va 🔔 yangi qismlar haqida bildirishnoma olish tugmalari mavjud. `/favorites` va `/subscriptions` saqlangan seriallarni ko‘rsatadi; `/search` qidiruvni boshlaydi. `/start` dagi inline menyu ham shu amallarni ochadi. Foydalanuvchilar uchun pastki reply paneli yashiriladi; to‘lov yoqilgan bo‘lsa, zarur `💳 To‘lov` tugmasi ko‘rsatiladi.
 
 ## Ishga tushirish
 

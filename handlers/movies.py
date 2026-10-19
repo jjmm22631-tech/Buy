@@ -1,7 +1,8 @@
+import asyncio
 import logging
 
 from aiogram import Bot, F, Router
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramNetworkError, TelegramRetryAfter
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError, TelegramNetworkError, TelegramRetryAfter
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
@@ -10,9 +11,11 @@ from database import Database
 from handlers.common import can, deny_callback, deny_message, is_series_bot
 from handlers.start import register_user, show_subscription_gate, subscription_status
 from keyboards import (
-    confirm_keyboard, movie_edit_keyboard, movie_menu, series_episodes_keyboard, series_seasons_keyboard,
+    confirm_keyboard, movie_edit_keyboard, movie_menu, series_delete_episodes_keyboard,
+    series_episodes_keyboard, series_library_keyboard, series_seasons_keyboard,
+    title_search_keyboard,
 )
-from handlers.states import MovieAdd, MovieEdit, SeriesAdd, SeriesEpisodeAdd
+from handlers.states import MovieAdd, MovieEdit, SeriesAdd, SeriesEpisodeAdd, SeriesEpisodeDelete
 from aiogram.fsm.context import FSMContext
 
 router = Router(name="movies")
@@ -42,23 +45,63 @@ async def _send_movie(message: Message, movie: dict) -> None:
 async def _lookup_movie(message: Message, db: Database, code: str, bot: Bot, config: Config) -> None:
     user_row = await db.fetchone("SELECT id FROM users WHERE telegram_id=?", (message.from_user.id,))
     movie = await db.fetchone("SELECT * FROM movies WHERE code=? AND is_active=1", (code,))
-    if movie is None and is_series_bot(bot, config):
+    series = None
+    if movie is None:
         series = await db.fetchone("SELECT * FROM series WHERE code=? AND is_active=1", (code,))
-        if series:
-            seasons = await db.fetchall(
-                "SELECT DISTINCT season_number FROM series_episodes WHERE series_id=? ORDER BY season_number",
-                (series["id"],),
+        if series is None:
+            escaped_query = code.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            pattern = f"%{escaped_query}%"
+            movies = await db.fetchall(
+                "SELECT id,title FROM movies WHERE is_active=1 AND title LIKE ? ESCAPE '\\' COLLATE NOCASE "
+                "ORDER BY title LIMIT 10",
+                (pattern,),
             )
-            if seasons:
+            series_matches = await db.fetchall(
+                "SELECT id,title FROM series WHERE is_active=1 AND title LIKE ? ESCAPE '\\' COLLATE NOCASE "
+                "ORDER BY title LIMIT 10",
+                (pattern,),
+            )
+            results = [
+                {"kind": "movie", "id": row["id"], "title": row["title"]} for row in movies
+            ] + [
+                {"kind": "series", "id": row["id"], "title": row["title"]} for row in series_matches
+            ]
+            if results:
                 request_id = await db.execute(
                     "INSERT INTO movie_requests(user_id,movie_code,found) VALUES(?,?,1)",
                     (user_row["id"], code),
                 )
                 await message.answer(
-                    f"📺 {series['title']}\nBo‘limni tanlang:",
-                    reply_markup=series_seasons_keyboard([dict(row) for row in seasons], request_id),
+                    "🔎 Topilgan kinolar va seriallar:",
+                    reply_markup=title_search_keyboard(results, request_id),
                 )
                 return
+    if series is not None:
+        seasons = await db.fetchall(
+            "SELECT DISTINCT season_number FROM series_episodes WHERE series_id=? ORDER BY season_number",
+            (series["id"],),
+        )
+        if seasons:
+            request_id = await db.execute(
+                "INSERT INTO movie_requests(user_id,movie_code,found) VALUES(?,?,1)",
+                (user_row["id"], code),
+            )
+            favorite = await db.fetchone(
+                "SELECT 1 FROM series_favorites WHERE user_id=? AND series_id=?",
+                (user_row["id"], series["id"]),
+            )
+            subscription = await db.fetchone(
+                "SELECT 1 FROM series_subscriptions WHERE user_id=? AND series_id=?",
+                (user_row["id"], series["id"]),
+            )
+            await message.answer(
+                f"📺 {series['title']}\nMavsumni tanlang:",
+                reply_markup=series_seasons_keyboard(
+                    [dict(row) for row in seasons], request_id, series["id"],
+                    favorite is not None, subscription is not None,
+                ),
+            )
+            return
     request_id = await db.execute(
         "INSERT INTO movie_requests(user_id, movie_code, found) VALUES(?, ?, ?)",
         (user_row["id"], code, int(movie is not None)),
@@ -84,7 +127,7 @@ async def search_prompt(message: Message, state: FSMContext, db: Database, confi
         await state.clear()
         await state.set_state(MovieEdit.code)
         await state.update_data(action="lookup")
-        await message.answer("Kino kodi yoki ID raqamini yuboring:")
+        await message.answer("Kino nomi, kodi yoki ID raqamini yuboring:")
         return
     await message.answer("Kino kodini yuboring.")
 
@@ -93,7 +136,7 @@ async def search_prompt(message: Message, state: FSMContext, db: Database, confi
 async def help_handler(message: Message, db: Database) -> None:
     support = (await db.get_setting("support_username", "")).strip().lstrip("@")
     contact = f" Muammo bo‘lsa, @{support} ga murojaat qiling." if support else " Muammo bo‘lsa, bot administratoriga murojaat qiling."
-    await message.answer("Kinoni topish uchun uning kodini yuboring." + contact)
+    await message.answer("Kino yoki serialni nomi/kodi bilan qidiring. Sevimlilar: /favorites, obunalar: /subscriptions." + contact)
 
 
 @router.message(F.text == "📢 Kanalimiz")
@@ -109,8 +152,7 @@ async def show_movie_menu(message: Message, db: Database, config: Config, bot: B
     if await deny_message(message, db, "movies", config):
         return
     menu_text = "🎬 Kinolarni boshqarish"
-    if is_series_bot(bot, config):
-        menu_text += "\nSerial buyruqlari: /addseries, /addseriesepisode, /series"
+    menu_text += "\nSerial buyruqlari: /addseries, /addseriesepisode, /deleteseriesepisode, /series"
     await message.answer(menu_text, reply_markup=movie_menu())
 
 
@@ -239,10 +281,8 @@ async def add_movie_save(callback: CallbackQuery, state: FSMContext, db: Databas
 
 
 @router.message(Command("addseries"))
+@router.message(F.text == "📺 Serial qo‘shish")
 async def add_series_start(message: Message, state: FSMContext, db: Database, config: Config, bot: Bot) -> None:
-    if not is_series_bot(bot, config):
-        await message.answer("Serial funksiyasi faqat ikkinchi botda mavjud.")
-        return
     if await deny_message(message, db, "movies", config):
         return
     await state.clear()
@@ -293,7 +333,7 @@ async def add_series_description(message: Message, state: FSMContext, db: Databa
         return
     await state.update_data(description=description, episodes=[])
     await state.set_state(SeriesAdd.episodes)
-    await message.answer("Har bir qism uchun /part <bo‘lim> <qism> yuboring, keyin video yuboring. Tugatgach /done yozing:")
+    await message.answer("Har bir qism uchun /part <mavsum> <qism> yuboring, keyin videoni yuboring. Mavsum birinchi qism bilan yaratiladi. Tugatgach /done yozing:")
 
 
 @router.message(SeriesAdd.episodes, Command("part"))
@@ -303,7 +343,7 @@ async def set_new_series_episode_numbers(message: Message, state: FSMContext, db
         return
     parts = (message.text or "").split()
     if len(parts) != 3 or not parts[1].isdigit() or not parts[2].isdigit() or int(parts[1]) < 1 or int(parts[2]) < 1:
-        await message.answer("Format: /part <bo‘lim_raqami> <qism_raqami>, masalan /part 1 1")
+        await message.answer("Format: /part <mavsum_raqami> <qism_raqami>, masalan /part 1 1")
         return
     season_number, episode_number = int(parts[1]), int(parts[2])
     data = await state.get_data()
@@ -314,7 +354,7 @@ async def set_new_series_episode_numbers(message: Message, state: FSMContext, db
         await message.answer("Bu bo‘lim va qism raqami kiritilgan. Boshqa raqamni kiriting:")
         return
     await state.update_data(pending_season=season_number, pending_episode=episode_number)
-    await message.answer(f"{season_number}-bo‘lim {episode_number}-qism. Endi video faylini yuboring:")
+    await message.answer(f"{season_number}-mavsum {episode_number}-qism. Endi video faylini yuboring:")
 
 
 @router.message(SeriesAdd.episodes, Command("done"))
@@ -358,12 +398,12 @@ async def collect_series_episode(message: Message, state: FSMContext, db: Databa
         return
     media = _media_details(message)
     if not media:
-        await message.answer("Avval /part <bo‘lim> <qism> kiriting, keyin qism videosini yuboring; yakunlash uchun /done:")
+        await message.answer("Avval /part <mavsum> <qism> kiriting, keyin qism videosini yuboring; yakunlash uchun /done:")
         return
     season_number = data.get("pending_season")
     episode_number = data.get("pending_episode")
     if not season_number or not episode_number:
-        await message.answer("Videodan oldin /part <bo‘lim> <qism> kiriting, masalan /part 1 1:")
+        await message.answer("Videodan oldin /part <mavsum> <qism> kiriting, masalan /part 1 1:")
         return
     episodes.append({
         "season_number": season_number,
@@ -373,14 +413,12 @@ async def collect_series_episode(message: Message, state: FSMContext, db: Databa
     })
     await state.update_data(episodes=episodes)
     await state.update_data(pending_season=None, pending_episode=None)
-    await message.answer(f"✅ {season_number}-bo‘lim {episode_number}-qism qabul qilindi. Keyingi qismga /part kiriting yoki /done:")
+    await message.answer(f"✅ {season_number}-mavsum {episode_number}-qism qabul qilindi. Keyingi qismga /part kiriting yoki /done:")
 
 
 @router.message(Command("addseriesepisode"))
+@router.message(F.text == "➕ Mavsum/qism qo‘shish")
 async def add_series_episode_start(message: Message, state: FSMContext, db: Database, config: Config, bot: Bot) -> None:
-    if not is_series_bot(bot, config):
-        await message.answer("Serial funksiyasi faqat ikkinchi botda mavjud.")
-        return
     if await deny_message(message, db, "movies", config):
         return
     await state.clear()
@@ -400,7 +438,7 @@ async def select_series_for_episode(message: Message, state: FSMContext, db: Dat
         return
     await state.update_data(series_id=series["id"], series_title=series["title"], added_count=0)
     await state.set_state(SeriesEpisodeAdd.episodes)
-    await message.answer(f"{series['title']} uchun har bir qism oldidan /part <bo‘lim> <qism> yuboring, so‘ng video yuboring. Tugatgach /done:")
+    await message.answer(f"{series['title']} uchun har bir qism oldidan /part <mavsum> <qism> yuboring, so‘ng videoni yuboring. Tugatgach /done:")
 
 
 @router.message(SeriesEpisodeAdd.episodes, Command("part"))
@@ -410,11 +448,11 @@ async def set_existing_series_episode_numbers(message: Message, state: FSMContex
         return
     parts = (message.text or "").split()
     if len(parts) != 3 or not parts[1].isdigit() or not parts[2].isdigit() or int(parts[1]) < 1 or int(parts[2]) < 1:
-        await message.answer("Format: /part <bo‘lim_raqami> <qism_raqami>, masalan /part 1 1")
+        await message.answer("Format: /part <mavsum_raqami> <qism_raqami>, masalan /part 1 1")
         return
     season_number, episode_number = int(parts[1]), int(parts[2])
     await state.update_data(pending_season=season_number, pending_episode=episode_number)
-    await message.answer(f"{season_number}-bo‘lim {episode_number}-qism. Endi video faylini yuboring:")
+    await message.answer(f"{season_number}-mavsum {episode_number}-qism. Endi video faylini yuboring:")
 
 
 @router.message(SeriesEpisodeAdd.episodes, Command("done"))
@@ -434,19 +472,26 @@ async def finish_series_episode_add(message: Message, state: FSMContext, db: Dat
 
 
 @router.message(SeriesEpisodeAdd.episodes)
-async def collect_existing_series_episode(message: Message, state: FSMContext, db: Database, config: Config, bot: Bot) -> None:
+async def collect_existing_series_episode(
+    message: Message,
+    state: FSMContext,
+    db: Database,
+    config: Config,
+    bot: Bot,
+    bot_registry: dict[int, Bot],
+) -> None:
     if not is_series_bot(bot, config) or await deny_message(message, db, "movies", config):
         await state.clear()
         return
     media = _media_details(message)
     if not media:
-        await message.answer("Avval /part <bo‘lim> <qism> kiriting, keyin qism videosini yuboring; yakunlash uchun /done:")
+        await message.answer("Avval /part <mavsum> <qism> kiriting, keyin qism videosini yuboring; yakunlash uchun /done:")
         return
     data = await state.get_data()
     season_number = data.get("pending_season")
     episode_number = data.get("pending_episode")
     if not season_number or not episode_number:
-        await message.answer("Videodan oldin /part <bo‘lim> <qism> kiriting, masalan /part 1 1:")
+        await message.answer("Videodan oldin /part <mavsum> <qism> kiriting, masalan /part 1 1:")
         return
     try:
         await db.add_series_episode(data["series_id"], season_number, episode_number, media[0], media[1])
@@ -454,28 +499,453 @@ async def collect_existing_series_episode(message: Message, state: FSMContext, d
         await message.answer(f"Qism qo‘shilmadi: {error}")
         return
     await db.log_admin(message.from_user.id, "series_episode_added", f"series_id={data['series_id']} season={season_number} episode={episode_number}")
+    await _notify_episode_subscribers(
+        db,
+        data["series_id"],
+        data["series_title"],
+        season_number,
+        episode_number,
+        bot,
+        bot_registry,
+    )
     added_count = data.get("added_count", 0) + 1
     await state.update_data(added_count=added_count, pending_season=None, pending_episode=None)
-    await message.answer(f"✅ {season_number}-bo‘lim {episode_number}-qism qo‘shildi. Keyingisiga /part kiriting yoki /done:")
+    await message.answer(f"✅ {season_number}-mavsum {episode_number}-qism qo‘shildi. Keyingisiga /part kiriting yoki /done:")
 
 
 @router.message(Command("series"))
+@router.message(F.text == "📋 Seriallar")
 async def list_series(message: Message, db: Database, config: Config, bot: Bot) -> None:
-    if not is_series_bot(bot, config):
-        await message.answer("Serial funksiyasi faqat ikkinchi botda mavjud.")
-        return
     if await deny_message(message, db, "movies", config):
         return
     rows = await db.fetchall(
-        "SELECT s.code,s.title,COUNT(e.id) AS episode_count FROM series s "
-        "LEFT JOIN series_episodes e ON e.series_id=s.id GROUP BY s.id ORDER BY s.id DESC"
+        "SELECT s.code,s.title,e.season_number,COUNT(e.id) AS episode_count FROM series s "
+        "LEFT JOIN series_episodes e ON e.series_id=s.id GROUP BY s.id,e.season_number "
+        "ORDER BY s.id DESC,e.season_number"
     )
     if not rows:
         await message.answer("Hozircha serial qo‘shilmagan.")
         return
+    grouped: dict[tuple[str, str], list[str]] = {}
+    for row in rows:
+        key = (row["code"], row["title"])
+        grouped.setdefault(key, []).append(
+            f"{row['season_number'] or 0}-mavsum: {row['episode_count']} qism"
+        )
     await message.answer("📺 Seriallar:\n" + "\n".join(
-        f"{row['code']} — {row['title']} ({row['episode_count']} qism)" for row in rows
+        f"{code} — {title} ({'; '.join(seasons)})"
+        for (code, title), seasons in grouped.items()
     ))
+
+
+async def _notify_episode_subscribers(
+    db: Database,
+    series_id: int,
+    series_title: str,
+    season_number: int,
+    episode_number: int,
+    current_bot: Bot,
+    bot_registry: dict[int, Bot],
+) -> None:
+    subscribers = await db.fetchall(
+        "SELECT u.telegram_id,s.bot_id FROM series_subscriptions s "
+        "JOIN users u ON u.id=s.user_id WHERE s.series_id=?",
+        (series_id,),
+    )
+    text = (
+        f"🔔 Yangi qism chiqdi!\n{series_title}\n"
+        f"{season_number}-mavsum {episode_number}-qism"
+    )
+    for subscriber in subscribers:
+        notify_bot = bot_registry.get(subscriber["bot_id"], current_bot)
+        try:
+            await notify_bot.send_message(subscriber["telegram_id"], text)
+        except TelegramRetryAfter as error:
+            await asyncio.sleep(error.retry_after)
+            try:
+                await notify_bot.send_message(subscriber["telegram_id"], text)
+            except TelegramAPIError as retry_error:
+                logger.warning(
+                    "Yangi qism xabari qayta yuborilmadi: user_id=%s series_id=%s error=%s",
+                    subscriber["telegram_id"],
+                    series_id,
+                    type(retry_error).__name__,
+                )
+        except TelegramAPIError as error:
+            logger.warning(
+                "Yangi qism xabari yuborilmadi: user_id=%s series_id=%s error=%s",
+                subscriber["telegram_id"],
+                series_id,
+                type(error).__name__,
+            )
+
+
+async def _open_series_for_user(message: Message, db: Database, user_id: int, series_id: int) -> bool:
+    series = await db.fetchone(
+        "SELECT id,code,title FROM series WHERE id=? AND is_active=1",
+        (series_id,),
+    )
+    if not series:
+        await message.answer("Serial topilmadi yoki u o‘chirilgan.")
+        return False
+    user = await db.fetchone("SELECT id FROM users WHERE telegram_id=?", (user_id,))
+    if not user:
+        await message.answer("Foydalanuvchi ma’lumoti topilmadi. /start buyrug‘ini yuboring.")
+        return False
+    seasons = await db.fetchall(
+        "SELECT DISTINCT season_number FROM series_episodes WHERE series_id=? ORDER BY season_number",
+        (series_id,),
+    )
+    if not seasons:
+        await message.answer("Bu serialda hali qismlar yo‘q.")
+        return False
+    request_id = await db.execute(
+        "INSERT INTO movie_requests(user_id,movie_code,found) VALUES(?,?,1)",
+        (user["id"], series["code"]),
+    )
+    favorite = await db.fetchone(
+        "SELECT 1 FROM series_favorites WHERE user_id=? AND series_id=?",
+        (user["id"], series_id),
+    )
+    subscription = await db.fetchone(
+        "SELECT 1 FROM series_subscriptions WHERE user_id=? AND series_id=?",
+        (user["id"], series_id),
+    )
+    await message.answer(
+        f"📺 {series['title']}\nMavsumni tanlang:",
+        reply_markup=series_seasons_keyboard(
+            [dict(row) for row in seasons], request_id, series_id,
+            favorite is not None, subscription is not None,
+        ),
+    )
+    return True
+
+
+async def _show_user_series_list(callback: CallbackQuery, db: Database, table: str, label: str) -> None:
+    user = await db.fetchone("SELECT id FROM users WHERE telegram_id=?", (callback.from_user.id,))
+    if not user:
+        await callback.answer("Avval /start buyrug‘ini yuboring.", show_alert=True)
+        return
+    rows = await db.fetchall(
+        f"SELECT s.id,s.title FROM {table} x JOIN series s ON s.id=x.series_id "
+        "WHERE x.user_id=? AND s.is_active=1 ORDER BY s.title COLLATE NOCASE",
+        (user["id"],),
+    )
+    if not rows:
+        await callback.message.answer(f"{label} ro‘yxati hozircha bo‘sh.")
+    else:
+        await callback.message.answer(
+            f"{label}:",
+            reply_markup=series_library_keyboard([dict(row) for row in rows]),
+        )
+    await callback.answer()
+
+
+@router.message(Command("search"))
+async def user_search_command(message: Message) -> None:
+    await message.answer("Kino yoki serial nomini/kodini yozing:")
+
+
+@router.message(Command("favorites"))
+async def favorites_command(message: Message, db: Database) -> None:
+    user = await db.fetchone("SELECT id FROM users WHERE telegram_id=?", (message.from_user.id,))
+    if not user:
+        await message.answer("Avval /start buyrug‘ini yuboring.")
+        return
+    rows = await db.fetchall(
+        "SELECT s.id,s.title FROM series_favorites f JOIN series s ON s.id=f.series_id "
+        "WHERE f.user_id=? AND s.is_active=1 ORDER BY s.title COLLATE NOCASE",
+        (user["id"],),
+    )
+    if rows:
+        await message.answer("⭐ Sevimli seriallaringiz:", reply_markup=series_library_keyboard([dict(row) for row in rows]))
+    else:
+        await message.answer("⭐ Sevimlilar ro‘yxati hozircha bo‘sh.")
+
+
+@router.message(Command("subscriptions"))
+async def subscriptions_command(message: Message, db: Database) -> None:
+    user = await db.fetchone("SELECT id FROM users WHERE telegram_id=?", (message.from_user.id,))
+    if not user:
+        await message.answer("Avval /start buyrug‘ini yuboring.")
+        return
+    rows = await db.fetchall(
+        "SELECT s.id,s.title FROM series_subscriptions x JOIN series s ON s.id=x.series_id "
+        "WHERE x.user_id=? AND s.is_active=1 ORDER BY s.title COLLATE NOCASE",
+        (user["id"],),
+    )
+    if rows:
+        await message.answer("🔔 Obuna bo‘lgan seriallaringiz:", reply_markup=series_library_keyboard([dict(row) for row in rows]))
+    else:
+        await message.answer("🔔 Hozircha seriallarga obuna bo‘lmagansiz.")
+
+
+@router.callback_query(F.data == "library:search")
+async def library_search_callback(callback: CallbackQuery) -> None:
+    await callback.message.answer("Kino yoki serial nomini/kodini yozing:")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "library:favorites")
+async def library_favorites_callback(callback: CallbackQuery, db: Database) -> None:
+    await _show_user_series_list(callback, db, "series_favorites", "⭐ Sevimli seriallaringiz")
+
+
+@router.callback_query(F.data == "library:subscriptions")
+async def library_subscriptions_callback(callback: CallbackQuery, db: Database) -> None:
+    await _show_user_series_list(callback, db, "series_subscriptions", "🔔 Obuna bo‘lgan seriallaringiz")
+
+
+@router.callback_query(F.data.startswith("library:open:"))
+async def library_open_series_callback(callback: CallbackQuery, db: Database) -> None:
+    parts = (callback.data or "").split(":")
+    if len(parts) != 3 or not parts[2].isdigit():
+        await callback.answer("Noto‘g‘ri so‘rov.", show_alert=True)
+        return
+    await _open_series_for_user(callback.message, db, callback.from_user.id, int(parts[2]))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("series:favorite:"))
+async def toggle_series_favorite(callback: CallbackQuery, db: Database) -> None:
+    parts = (callback.data or "").split(":")
+    if len(parts) != 4 or not parts[2].isdigit() or not parts[3].isdigit():
+        await callback.answer("Noto‘g‘ri so‘rov.", show_alert=True)
+        return
+    request_id, series_id = int(parts[2]), int(parts[3])
+    user = await db.fetchone(
+        "SELECT u.id,r.movie_code FROM movie_requests r JOIN users u ON u.id=r.user_id "
+        "WHERE r.id=? AND u.telegram_id=? AND r.found=1",
+        (request_id, callback.from_user.id),
+    )
+    series = await db.fetchone("SELECT code FROM series WHERE id=? AND is_active=1", (series_id,))
+    if not user or not series or user["movie_code"] != series["code"]:
+        await callback.answer("Serial tanlovi eskirgan. Serialni qayta qidiring.", show_alert=True)
+        return
+    existing = await db.fetchone(
+        "SELECT 1 FROM series_favorites WHERE user_id=? AND series_id=?",
+        (user["id"], series_id),
+    )
+    if existing:
+        await db.execute("DELETE FROM series_favorites WHERE user_id=? AND series_id=?", (user["id"], series_id))
+        await callback.answer("Sevimlilardan olib tashlandi.")
+    else:
+        await db.execute("INSERT INTO series_favorites(user_id,series_id) VALUES(?,?)", (user["id"], series_id))
+        await callback.answer("Sevimlilarga saqlandi ⭐")
+    await _refresh_series_keyboard(callback, db, user["id"], request_id, series_id)
+
+
+@router.callback_query(F.data.startswith("series:subscribe:"))
+async def toggle_series_subscription(callback: CallbackQuery, db: Database, bot: Bot) -> None:
+    parts = (callback.data or "").split(":")
+    if len(parts) != 4 or not parts[2].isdigit() or not parts[3].isdigit():
+        await callback.answer("Noto‘g‘ri so‘rov.", show_alert=True)
+        return
+    request_id, series_id = int(parts[2]), int(parts[3])
+    user = await db.fetchone(
+        "SELECT u.id,r.movie_code FROM movie_requests r JOIN users u ON u.id=r.user_id "
+        "WHERE r.id=? AND u.telegram_id=? AND r.found=1",
+        (request_id, callback.from_user.id),
+    )
+    series = await db.fetchone("SELECT code FROM series WHERE id=? AND is_active=1", (series_id,))
+    if not user or not series or user["movie_code"] != series["code"]:
+        await callback.answer("Serial tanlovi eskirgan. Serialni qayta qidiring.", show_alert=True)
+        return
+    existing = await db.fetchone(
+        "SELECT 1 FROM series_subscriptions WHERE user_id=? AND series_id=?",
+        (user["id"], series_id),
+    )
+    if existing:
+        await db.execute("DELETE FROM series_subscriptions WHERE user_id=? AND series_id=?", (user["id"], series_id))
+        await callback.answer("Serial yangiliklari o‘chirildi.")
+    else:
+        await db.execute(
+            "INSERT INTO series_subscriptions(user_id,series_id,bot_id) VALUES(?,?,?)",
+            (user["id"], series_id, bot.id),
+        )
+        await callback.answer("Yangi qismlar haqida xabar beramiz 🔔")
+    await _refresh_series_keyboard(callback, db, user["id"], request_id, series_id)
+
+
+async def _refresh_series_keyboard(
+    callback: CallbackQuery,
+    db: Database,
+    user_id: int,
+    request_id: int,
+    series_id: int,
+) -> None:
+    seasons = await db.fetchall(
+        "SELECT DISTINCT season_number FROM series_episodes WHERE series_id=? ORDER BY season_number",
+        (series_id,),
+    )
+    favorite = await db.fetchone(
+        "SELECT 1 FROM series_favorites WHERE user_id=? AND series_id=?",
+        (user_id, series_id),
+    )
+    subscription = await db.fetchone(
+        "SELECT 1 FROM series_subscriptions WHERE user_id=? AND series_id=?",
+        (user_id, series_id),
+    )
+    await callback.message.edit_reply_markup(
+        reply_markup=series_seasons_keyboard(
+            [dict(row) for row in seasons], request_id, series_id,
+            favorite is not None, subscription is not None,
+        )
+    )
+
+
+@router.message(Command("deleteseriesepisode"))
+@router.message(F.text == "🗑 Serial qismini o‘chirish")
+async def delete_series_episode_start(message: Message, state: FSMContext, db: Database, config: Config) -> None:
+    if await deny_message(message, db, "movies", config):
+        return
+    await state.clear()
+    await state.set_state(SeriesEpisodeDelete.code)
+    await message.answer("Qism o‘chiriladigan serial kodini yuboring:")
+
+
+@router.message(SeriesEpisodeDelete.code)
+async def select_series_episode_to_delete(
+    message: Message,
+    state: FSMContext,
+    db: Database,
+    config: Config,
+) -> None:
+    if await deny_message(message, db, "movies", config):
+        await state.clear()
+        return
+    code = (message.text or "").strip()
+    series = await db.fetchone("SELECT id,title FROM series WHERE code=? AND is_active=1", (code,))
+    if not series:
+        await message.answer("Faol serial topilmadi. Kodni qayta yuboring:")
+        return
+    episodes = await db.fetchall(
+        "SELECT id,season_number,episode_number FROM series_episodes "
+        "WHERE series_id=? ORDER BY season_number,episode_number",
+        (series["id"],),
+    )
+    if not episodes:
+        await state.clear()
+        await message.answer("Bu serialda o‘chiriladigan qismlar yo‘q.")
+        return
+    await state.clear()
+    await message.answer(
+        f"🗑 {series['title']} — o‘chiriladigan qismni tanlang:",
+        reply_markup=series_delete_episodes_keyboard([dict(row) for row in episodes]),
+    )
+
+
+@router.callback_query(F.data.regexp(r"^series:deleteepisode:\d+$"))
+async def confirm_delete_series_episode(callback: CallbackQuery, db: Database, config: Config) -> None:
+    if await deny_callback(callback, db, "movies", config):
+        return
+    parts = (callback.data or "").split(":")
+    if len(parts) != 3 or not parts[2].isdigit():
+        await callback.answer("Noto‘g‘ri so‘rov.", show_alert=True)
+        return
+    episode = await db.fetchone(
+        "SELECT e.id,e.season_number,e.episode_number,s.title FROM series_episodes e "
+        "JOIN series s ON s.id=e.series_id WHERE e.id=?",
+        (int(parts[2]),),
+    )
+    if not episode:
+        await callback.answer("Qism topilmadi yoki oldin o‘chirilgan.", show_alert=True)
+        return
+    await callback.message.edit_text(
+        f"🗑 {episode['title']} — {episode['season_number']}-mavsum "
+        f"{episode['episode_number']}-qismni o‘chirishni tasdiqlaysizmi?",
+        reply_markup=confirm_keyboard(f"series:deleteepisode:confirm:{episode['id']}"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("series:deleteepisode:confirm:"))
+async def delete_series_episode_confirm(callback: CallbackQuery, db: Database, config: Config) -> None:
+    if await deny_callback(callback, db, "movies", config):
+        return
+    parts = (callback.data or "").split(":")
+    if len(parts) != 4 or not parts[3].isdigit():
+        await callback.answer("Noto‘g‘ri so‘rov.", show_alert=True)
+        return
+    episode = await db.fetchone(
+        "SELECT e.series_id,e.season_number,e.episode_number,s.title FROM series_episodes e "
+        "JOIN series s ON s.id=e.series_id WHERE e.id=?",
+        (int(parts[3]),),
+    )
+    if not episode:
+        await callback.answer("Qism topilmadi yoki oldin o‘chirilgan.", show_alert=True)
+        return
+    await db.execute("DELETE FROM series_episodes WHERE id=?", (int(parts[3]),))
+    await db.log_admin(
+        callback.from_user.id,
+        "series_episode_deleted",
+        f"series_id={episode['series_id']} season={episode['season_number']} episode={episode['episode_number']}",
+    )
+    await callback.message.edit_text(
+        f"✅ {episode['title']} serialining {episode['season_number']}-mavsum "
+        f"{episode['episode_number']}-qismi o‘chirildi."
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("search:movie:"))
+async def select_movie_search_result(callback: CallbackQuery, bot: Bot, db: Database) -> None:
+    parts = (callback.data or "").split(":")
+    if len(parts) != 4 or not parts[2].isdigit() or not parts[3].isdigit():
+        await callback.answer("Noto‘g‘ri so‘rov.", show_alert=True)
+        return
+    request = await db.fetchone(
+        "SELECT r.id,r.movie_code,u.id AS user_id FROM movie_requests r "
+        "JOIN users u ON u.id=r.user_id WHERE r.id=? AND u.telegram_id=? AND r.found=1",
+        (int(parts[2]), callback.from_user.id),
+    )
+    escaped_query = request["movie_code"].replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") if request else ""
+    movie = await db.fetchone(
+        "SELECT * FROM movies WHERE id=? AND is_active=1 AND title LIKE ? ESCAPE '\\' COLLATE NOCASE",
+        (int(parts[3]), f"%{escaped_query}%"),
+    ) if request else None
+    if not request or not movie:
+        await callback.answer("Qidiruv natijasi eskirgan. Qayta qidiring.", show_alert=True)
+        return
+    allowed, channels = await subscription_status(bot, db, callback.from_user.id)
+    if not allowed:
+        await callback.answer("Avval kanallarga obuna bo‘ling.", show_alert=True)
+        await show_subscription_gate(callback.message, channels, db)
+        return
+    movie_data = dict(movie)
+    if not movie_data.get("extra_text"):
+        movie_data["extra_text"] = await db.get_setting("advertisement_text", "")
+    try:
+        await _send_movie(callback.message, movie_data)
+    except (TelegramBadRequest, TelegramForbiddenError, TelegramNetworkError, TelegramRetryAfter) as error:
+        logger.warning("Qidiruv natijasi yuborilmadi: movie_id=%s error=%s", movie["id"], type(error).__name__)
+        await callback.answer("Kino yuborilmadi. Keyinroq qayta urinib ko‘ring.", show_alert=True)
+        return
+    await db.execute("UPDATE movie_requests SET delivered=1 WHERE id=?", (request["id"],))
+    await callback.answer("✅ Kino yuborildi.")
+
+
+@router.callback_query(F.data.startswith("search:series:"))
+async def select_series_search_result(callback: CallbackQuery, db: Database) -> None:
+    parts = (callback.data or "").split(":")
+    if len(parts) != 4 or not parts[2].isdigit() or not parts[3].isdigit():
+        await callback.answer("Noto‘g‘ri so‘rov.", show_alert=True)
+        return
+    request = await db.fetchone(
+        "SELECT r.movie_code,u.id AS user_id FROM movie_requests r "
+        "JOIN users u ON u.id=r.user_id WHERE r.id=? AND u.telegram_id=? AND r.found=1",
+        (int(parts[2]), callback.from_user.id),
+    )
+    escaped_query = request["movie_code"].replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") if request else ""
+    series = await db.fetchone(
+        "SELECT id,title FROM series WHERE id=? AND is_active=1 AND title LIKE ? ESCAPE '\\' COLLATE NOCASE",
+        (int(parts[3]), f"%{escaped_query}%"),
+    ) if request else None
+    if not request or not series:
+        await callback.answer("Qidiruv natijasi eskirgan. Qayta qidiring.", show_alert=True)
+        return
+    await _open_series_for_user(callback.message, db, callback.from_user.id, series["id"])
+    await callback.answer()
 
 
 @router.message(F.text == "✏️ Kinoni tahrirlash")
@@ -493,19 +963,33 @@ async def edit_movie_select(message: Message, state: FSMContext, db: Database, c
         await state.clear()
         return
     key = (message.text or "").strip()
+    data = await state.get_data()
+    if data.get("action") == "lookup":
+        escaped_key = key.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        matches = await db.fetchall(
+            "SELECT id,code,title,description,is_active FROM movies "
+            "WHERE code=? OR CAST(id AS TEXT)=? OR title LIKE ? ESCAPE '\\' COLLATE NOCASE "
+            "ORDER BY title LIMIT 10",
+            (key, key, f"%{escaped_key}%"),
+        )
+        await state.clear()
+        if not matches:
+            await message.answer("Kino topilmadi. Nom, kod yoki ID ni tekshiring.")
+            return
+        await message.answer("🔎 Kino qidiruv natijalari:\n" + "\n".join(
+            f"{row['id']}. {row['title']} — kod: {row['code']} "
+            f"({'Faol' if row['is_active'] else 'O‘chirilgan'})"
+            for row in matches
+        ))
+        return
     movie = await db.fetchone("SELECT * FROM movies WHERE code=? OR CAST(id AS TEXT)=?", (key, key))
     if not movie:
         await message.answer("Kino topilmadi. Kod yoki ID ni qayta yuboring:")
         return
-    data = await state.get_data()
     if data.get("action") == "delete":
         await state.update_data(movie_id=movie["id"])
         await state.set_state(None)
         await message.answer(f"🗑 {movie['title']} (kod: {movie['code']}) kinoni o‘chirishni tasdiqlaysizmi?", reply_markup=confirm_keyboard(f"movie:delete:{movie['id']}"))
-        return
-    if data.get("action") == "lookup":
-        await state.clear()
-        await message.answer(f"ID: {movie['id']}\nKod: {movie['code']}\nNomi: {movie['title']}\nTavsif: {movie['description'] or 'Yo‘q'}\nHolati: {'Faol' if movie['is_active'] else 'O‘chirilgan'}")
         return
     await state.update_data(movie_id=movie["id"])
     await state.set_state(None)
@@ -642,10 +1126,10 @@ async def show_series_season_episodes(callback: CallbackQuery, bot: Bot, db: Dat
         (series["id"], season_number),
     )
     if not episodes:
-        await callback.answer("Bu bo‘limda qismlar topilmadi.", show_alert=True)
+        await callback.answer("Bu mavsumda qismlar topilmadi.", show_alert=True)
         return
     await callback.message.edit_text(
-        f"📺 {series['title']}\n{season_number}-bo‘limdan qismni tanlang:",
+        f"📺 {series['title']}\n{season_number}-mavsumdan qismni tanlang:",
         reply_markup=series_episodes_keyboard([dict(row) for row in episodes], request["id"]),
     )
     await callback.answer()
@@ -683,7 +1167,7 @@ async def send_series_episode(callback: CallbackQuery, bot: Bot, db: Database, c
         await show_subscription_gate(callback.message, channels, db)
         return
     movie_data = dict(episode)
-    movie_data["title"] = f"{episode['title']} | {episode['season_number']}-bo‘lim {episode['episode_number']}-qism"
+    movie_data["title"] = f"{episode['title']} | {episode['season_number']}-mavsum {episode['episode_number']}-qism"
     if not movie_data.get("extra_text"):
         movie_data["extra_text"] = await db.get_setting("advertisement_text", "")
     try:
@@ -696,7 +1180,7 @@ async def send_series_episode(callback: CallbackQuery, bot: Bot, db: Database, c
     await callback.answer("✅ Qism yuborildi.")
 
 
-@router.message(F.text.regexp(r"^[^\s/]{1,64}$"))
+@router.message(F.text.regexp(r"^[^/].{0,249}$"))
 async def movie_code_handler(message: Message, bot: Bot, db: Database, config: Config) -> None:
     await register_user(message, db)
     user = await db.fetchone("SELECT is_blocked FROM users WHERE telegram_id=?", (message.from_user.id,))
@@ -713,10 +1197,10 @@ async def movie_code_handler(message: Message, bot: Bot, db: Database, config: C
 @router.message(F.text)
 async def unmatched_text_handler(message: Message, db: Database, config: Config) -> None:
     if message.from_user.id not in config.admin_ids:
-        await message.answer("Kino kodini matn ko‘rinishida yuboring.")
+        await message.answer("Kino yoki serial nomi/kodini matn ko‘rinishida yuboring.")
 
 
 @router.message()
 async def non_text_handler(message: Message, db: Database, config: Config) -> None:
     if message.from_user.id not in config.admin_ids:
-        await message.answer("Kino kodini matn ko‘rinishida yuboring.")
+        await message.answer("Kino yoki serial kodini yuboring.")

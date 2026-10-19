@@ -69,6 +69,21 @@ class Database:
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(series_id, season_number, episode_number)
             );
+            CREATE TABLE IF NOT EXISTS series_favorites (
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                series_id INTEGER NOT NULL REFERENCES series(id) ON DELETE CASCADE,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(user_id, series_id)
+            );
+            CREATE TABLE IF NOT EXISTS series_subscriptions (
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                series_id INTEGER NOT NULL REFERENCES series(id) ON DELETE CASCADE,
+                bot_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(user_id, series_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_series_subscriptions_series
+                ON series_subscriptions(series_id);
             CREATE TABLE IF NOT EXISTS channels (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 channel_id INTEGER NOT NULL UNIQUE,

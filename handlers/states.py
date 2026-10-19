@@ -27,6 +27,10 @@ class SeriesEpisodeAdd(StatesGroup):
     episodes = State()
 
 
+class SeriesEpisodeDelete(StatesGroup):
+    code = State()
+
+
 class AdminManage(StatesGroup):
     add_id = State()
     add_confirm = State()

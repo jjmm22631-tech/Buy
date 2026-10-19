@@ -116,9 +116,11 @@ async def main() -> None:
     try:
         await db.connect()
         await admin.seed_admins(db, config)
-        for index, bot in enumerate(bots):
-            await configure_commands(bot, config.admin_ids, series_enabled=index == 1)
+        bot_registry = {}
+        for bot in bots:
+            await configure_commands(bot, config.admin_ids, series_enabled=True)
             identity = await bot.get_me()
+            bot_registry[identity.id] = bot
             logger.info("Bot ishga tushdi: @%s", identity.username)
         logger.info("Ownerlar soni: %s; botlar soni: %s", len(config.admin_ids), len(bots))
         health_server = await start_health_server(logger)
@@ -126,6 +128,7 @@ async def main() -> None:
             *bots,
             db=db,
             config=config,
+            bot_registry=bot_registry,
             allowed_updates=dispatcher.resolve_used_update_types(),
             close_bot_session=False,
         )

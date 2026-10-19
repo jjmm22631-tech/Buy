@@ -6,7 +6,7 @@ from database import Database
 
 
 def is_series_bot(bot: Bot, config: Config) -> bool:
-    return len(config.bot_tokens) > 1 and bot.token == config.bot_tokens[1]
+    return bot.token in config.bot_tokens
 
 
 async def is_admin(db: Database, telegram_id: int, config: Config) -> bool:
