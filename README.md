@@ -51,9 +51,9 @@ Bot long polling ishlatadi. Har bir bot tokeni uchun faqat bitta Render service/
 
 ## Majburiy obuna
 
-Admin panelidagi **📢 Majburiy obuna** bo‘limini oching. **➕ Kanal qo‘shish** yoki **➕ Guruh qo‘shish** tugmasini bosib, chatning ommaviy `https://t.me/username` havolasini yuboring. Bot chatni topib, undagi administratorligini tekshiradi; faqat tekshiruvdan o‘tgach ro‘yxatga saqlaydi. Ulangan kanallar va guruhlar shu bo‘limda ko‘rinadi; har bir chatning yonidagi **🗑 O‘chirish** tugmasi uni ro‘yxatdan olib tashlaydi. Majburiy obunani shu bo‘limdan yoqish yoki o‘chirish mumkin.
+Admin panelidagi **📢 Majburiy obuna** bo‘limini oching. **➕ Kanal qo‘shish** yoki **➕ Guruh qo‘shish** tugmasi ommaviy `@username`/`https://t.me/username` yoki chat ID qabul qiladi. Maxfiy chat uchun ID’ni yuboring yoki o‘sha chatdagi xabarni botga forward qiling; bot taklif havolasini avtomatik yaratadi. Mavjud maxfiy havolani ishlatish uchun `chat_id | https://t.me/+...` formatidan foydalaning. Bot chatni topib, undagi administratorligini tekshiradi; faqat tekshiruvdan o‘tgach ro‘yxatga saqlaydi. Ulangan kanallar va guruhlar shu bo‘limda ko‘rinadi; har bir chatning yonidagi **🗑 O‘chirish** tugmasi uni ro‘yxatdan olib tashlaydi. Majburiy obunani shu bo‘limdan yoqish yoki o‘chirish mumkin.
 
-Botni tekshiriladigan har bir kanal yoki guruhga administrator qilib qo‘shing. Bot admin bo‘lmasa, chat saqlanmaydi. Maxfiy taklif havolasi yoki `t.me/c/...` manzilidan chat ID’sini olib tekshirish imkoni yo‘q; bunday holatda ommaviy `t.me/username` havolasidan foydalaning.
+Botni tekshiriladigan har bir kanal yoki guruhga administrator qilib qo‘shing; bot a’zolikni tekshira olishi va maxfiy taklif havolasini yaratishi uchun administrator bo‘lishi kerak. Bot `/start` bosilganda barcha ulangan chatlardagi a’zolikni tekshiradi. Birortasiga a’zo bo‘lmasa, obuna havolalari va **✅ Obunani tekshirish** tugmasini ko‘rsatadi; barcha chatlarda a’zoligi tasdiqlangach, bot menyusini ochadi.
 
 Buyruqlar orqali boshqarish ham mumkin:
 

@@ -8,13 +8,19 @@ from unittest.mock import AsyncMock
 
 from config import Config, _load_env_file
 from database import Database
-from handlers.admin import create_access_link, public_chat_username
+from handlers.admin import (
+    create_access_link,
+    private_chat_invite_link,
+    public_chat_username,
+    save_linked_channel_or_group,
+)
 from handlers.common import can
 from handlers.movies import _notify_episode_subscribers, is_series_bot
-from handlers.start import chat_join_request_handler
+from handlers.start import DEFAULT_SUBSCRIPTION, chat_join_request_handler, start_handler, subscription_status
 from keyboards import (
     admin_menu, cancel_menu, channel_management_keyboard, confirm_keyboard, main_menu, movie_menu,
-    series_delete_episodes_keyboard, series_episodes_keyboard, series_seasons_keyboard, title_search_keyboard,
+    series_delete_episodes_keyboard, series_episodes_keyboard, series_seasons_keyboard, subscription_keyboard,
+    title_search_keyboard,
 )
 from aiogram.types import ReplyKeyboardRemove
 from types import SimpleNamespace
@@ -256,6 +262,105 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(await self.db.get_setting("access_invite_link"), "https://t.me/+request-link")
 
+    async def test_private_group_can_be_added_from_owner_panel(self) -> None:
+        await self.db.add_admin(1001, "owner", ["channels"], 1001)
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=1001),
+            text="-100123",
+            forward_origin=None,
+            answer=AsyncMock(),
+        )
+        state = SimpleNamespace(
+            get_data=AsyncMock(return_value={"chat_type": "group"}),
+            clear=AsyncMock(),
+        )
+        chat = SimpleNamespace(
+            id=-100123,
+            type="supergroup",
+            username=None,
+            title="Maxfiy guruh",
+        )
+        bot = SimpleNamespace(
+            id=9001,
+            get_chat=AsyncMock(return_value=chat),
+            get_chat_member=AsyncMock(return_value=SimpleNamespace(status="administrator")),
+            create_chat_invite_link=AsyncMock(
+                return_value=SimpleNamespace(invite_link="https://t.me/+private-group")
+            ),
+        )
+        config = Config("token", ("token",), 1001, (1001,), "db.sqlite3", "INFO")
+
+        await save_linked_channel_or_group(message, state, self.db, config, bot)
+
+        channel = await self.db.fetchone("SELECT * FROM channels WHERE channel_id=-100123")
+        self.assertEqual(channel["chat_type"], "group")
+        self.assertEqual(channel["invite_link"], "https://t.me/+private-group")
+        bot.create_chat_invite_link.assert_awaited_once_with(chat_id=-100123)
+        state.clear.assert_awaited_once()
+
+    async def test_mandatory_subscription_requires_membership_in_every_chat(self) -> None:
+        await self.db.execute(
+            "INSERT INTO channels(channel_id,channel_username,invite_link,chat_type,title) VALUES(?,?,?,?,?)",
+            (-100123, None, "https://t.me/+private-channel", "channel", "Private channel"),
+        )
+        await self.db.execute(
+            "INSERT INTO channels(channel_id,channel_username,invite_link,chat_type,title) VALUES(?,?,?,?,?)",
+            (-100456, None, "https://t.me/+private-group", "group", "Private group"),
+        )
+        bot = SimpleNamespace(
+            get_chat_member=AsyncMock(
+                side_effect=[
+                    SimpleNamespace(status="member", is_member=True),
+                    SimpleNamespace(status="left", is_member=False),
+                ]
+            )
+        )
+
+        allowed, channels = await subscription_status(bot, self.db, 2020)
+
+        self.assertFalse(allowed)
+        self.assertEqual(len(channels), 2)
+        self.assertEqual(
+            [call.args for call in bot.get_chat_member.await_args_list],
+            [(-100123, 2020), (-100456, 2020)],
+        )
+
+        bot.get_chat_member = AsyncMock(
+            return_value=SimpleNamespace(status="member", is_member=True),
+        )
+        allowed, _ = await subscription_status(bot, self.db, 2020)
+
+        self.assertTrue(allowed)
+        self.assertEqual(bot.get_chat_member.await_count, 2)
+
+    async def test_start_shows_subscription_gate_until_user_joins_required_chat(self) -> None:
+        await self.db.execute(
+            "INSERT INTO channels(channel_id,channel_username,invite_link,chat_type,title) VALUES(?,?,?,?,?)",
+            (-100123, None, "https://t.me/+private-channel", "channel", "Private channel"),
+        )
+        user = SimpleNamespace(id=2021, full_name="Test User", username=None)
+        message = SimpleNamespace(from_user=user, answer=AsyncMock())
+        state = SimpleNamespace(clear=AsyncMock())
+        bot = SimpleNamespace(
+            token="test-token",
+            get_chat_member=AsyncMock(return_value=SimpleNamespace(status="left", is_member=False)),
+        )
+        config = Config("test-token", ("test-token",), 1001, (1001,), "db.sqlite3", "INFO")
+
+        await start_handler(message, state, bot, self.db, config)
+
+        self.assertEqual(message.answer.await_args.args[0], DEFAULT_SUBSCRIPTION)
+        self.assertEqual(message.answer.await_args.kwargs["reply_markup"].inline_keyboard[0][0].url, "https://t.me/+private-channel")
+        self.assertEqual(message.answer.await_count, 1)
+
+        message.answer.reset_mock()
+        bot.get_chat_member = AsyncMock(return_value=SimpleNamespace(status="member", is_member=True))
+        await start_handler(message, state, bot, self.db, config)
+
+        self.assertEqual(message.answer.await_count, 2)
+        self.assertIn("xush kelibsiz", message.answer.await_args_list[0].args[0].casefold())
+        self.assertEqual(message.answer.await_args_list[1].args[0], "Kerakli bo‘limni tanlang:")
+
     async def test_admin_access_requires_configured_telegram_id(self) -> None:
         config = Config("token", ("token",), 1001, (1001, 3003, 4004), "db.sqlite3", "INFO")
         await self.db.add_admin(2002, "admin", ["movies"], 1001)
@@ -324,6 +429,9 @@ class MainMenuTests(unittest.TestCase):
         self.assertEqual(public_chat_username("@coder_company"), "coder_company")
         self.assertIsNone(public_chat_username("https://t.me/+privateinvite"))
         self.assertIsNone(public_chat_username("https://example.com/channel"))
+        self.assertEqual(private_chat_invite_link("https://t.me/+privateinvite"), "https://t.me/+privateinvite")
+        self.assertEqual(private_chat_invite_link("t.me/joinchat/Invite_code"), "https://t.me/joinchat/Invite_code")
+        self.assertIsNone(private_chat_invite_link("https://example.com/+privateinvite"))
 
     def test_channel_management_lists_entries_and_add_actions(self) -> None:
         keyboard = channel_management_keyboard(
@@ -338,6 +446,17 @@ class MainMenuTests(unittest.TestCase):
         self.assertIn("channel:add:channel", callbacks)
         self.assertIn("channel:add:group", callbacks)
         self.assertTrue(any("Majburiy obunani o‘chirish" in label for label in labels))
+
+    def test_subscription_keyboard_displays_channel_and_group_invites(self) -> None:
+        keyboard = subscription_keyboard([
+            {"invite_link": "https://t.me/+channel", "chat_type": "channel"},
+            {"invite_link": "https://t.me/+group", "chat_type": "group"},
+        ])
+
+        self.assertEqual(keyboard.inline_keyboard[0][0].url, "https://t.me/+channel")
+        self.assertIn("kanalga", keyboard.inline_keyboard[0][0].text)
+        self.assertEqual(keyboard.inline_keyboard[1][0].url, "https://t.me/+group")
+        self.assertIn("guruhga", keyboard.inline_keyboard[1][0].text)
 
     def test_series_actions_and_title_search_use_scoped_callbacks(self) -> None:
         seasons = series_seasons_keyboard(

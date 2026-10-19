@@ -155,7 +155,9 @@ def subscription_keyboard(channels: list[dict]) -> InlineKeyboardMarkup:
     for index, channel in enumerate(channels, start=1):
         link = channel.get("invite_link") or (f"https://t.me/{channel['channel_username'].lstrip('@')}" if channel.get("channel_username") else "")
         if link:
-            rows.append([inline_button(text=f"📢 {index}-kanalga obuna bo‘lish", url=link)])
+            label = "kanal" if channel.get("chat_type", "channel") == "channel" else "guruh"
+            icon = "📢" if label == "kanal" else "👥"
+            rows.append([inline_button(text=f"{icon} {index}-{label}ga obuna bo‘lish", url=link)])
     rows.append([inline_button(text="✅ Obunani tekshirish", callback_data="subscription:check")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 

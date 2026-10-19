@@ -21,7 +21,7 @@ DEFAULT_SERIES_WELCOME = (
     "Uzbek Tarjima Serialar Olami botiga xush kelibsiz! 🎬\n\n"
     "Sevimli serialaringizni topish uchun serial kodini yuboring."
 )
-DEFAULT_SUBSCRIPTION = "❗ Botdan foydalanish uchun quyidagi kanallarga obuna bo‘ling."
+DEFAULT_SUBSCRIPTION = "❗ Botdan foydalanish uchun quyidagi kanal va guruhlarga obuna bo‘ling."
 
 
 async def register_user(message: Message, db: Database) -> None:

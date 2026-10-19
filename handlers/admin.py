@@ -39,7 +39,7 @@ async def seed_admins(db: Database, config: Config) -> None:
         "welcome_text": "Assalomu alaykum! 👋\nUzbek Kinolar Olami botiga xush kelibsiz! 🎬\n\nSevimli kinolaringizni topish uchun kino kodini yuboring.",
         "series_welcome_text": "Assalomu alaykum! 👋\nUzbek Tarjima Serialar Olami botiga xush kelibsiz! 🎬\n\nSevimli serialaringizni topish uchun serial kodini yuboring.",
         "not_found_text": "❌ Bunday koddagi kino topilmadi.\n\nIltimos, kodni tekshirib qayta yuboring.",
-        "subscription_text": "❗ Botdan foydalanish uchun quyidagi kanallarga obuna bo‘ling.",
+        "subscription_text": "❗ Botdan foydalanish uchun quyidagi kanal va guruhlarga obuna bo‘ling.",
         "subscription_enabled": "1",
         "bot_enabled": "1",
         "payments_enabled": "0",
@@ -304,8 +304,8 @@ async def channel_management_view(db: Database):
         f"📋 Ulangan kanallar va guruhlar\n"
         f"Majburiy obuna: {'yoqilgan' if enabled else 'o‘chirilgan'}\n\n"
         f"Ulangan chatlar: {total['total']}\n\n"
-        "Kanal yoki guruh qo‘shish uchun tugmani bosing va ommaviy havolasini yuboring.\n"
-        "Bot kanal yoki guruhda administrator bo‘lishi shart."
+        "Ommaviy chat uchun @username/havola, maxfiy chat uchun chat ID’si yoki forward qilingan xabarni yuboring.\n"
+        "Bot har bir kanal yoki guruhda administrator bo‘lishi shart."
         + ("\nO‘chirish tugmalari ro‘yxatdagi eng so‘nggi 40 ta chat uchun ko‘rsatilgan." if total["total"] > 40 else "")
     ]
     return "\n".join(lines), channel_management_keyboard([dict(row) for row in channels], enabled)
@@ -326,6 +326,19 @@ def public_chat_username(link: str) -> str | None:
     return path
 
 
+def private_chat_invite_link(value: str) -> str | None:
+    link = value.strip()
+    if not link.startswith(("https://", "http://")):
+        link = "https://" + link
+    parsed = urlsplit(link)
+    if parsed.scheme not in {"http", "https"} or parsed.hostname not in {"t.me", "www.t.me"}:
+        return None
+    path = parsed.path.strip("/")
+    if re.fullmatch(r"\+[A-Za-z0-9_-]+", path) or re.fullmatch(r"joinchat/[A-Za-z0-9_-]+", path):
+        return link
+    return None
+
+
 @router.callback_query(F.data.startswith("channel:add:"))
 async def start_add_channel_or_group(
     callback: CallbackQuery,
@@ -343,8 +356,11 @@ async def start_add_channel_or_group(
     await state.update_data(chat_type=parts[2])
     await state.set_state(ChannelManage.add_link)
     await callback.message.answer(
-        f"{'Kanal' if parts[2] == 'channel' else 'Guruh'}ning ommaviy havolasini yuboring "
-        "(masalan, https://t.me/coder_company).\n"
+        f"{'Kanal' if parts[2] == 'channel' else 'Guruh'}ni qo‘shish uchun ommaviy "
+        "@username/havolasini yoki chat ID’sini yuboring.\n"
+        "Maxfiy chat uchun chat ID’sini yuboring yoki o‘sha chatdagi xabarni botga forward qiling; "
+        "ixtiyoriy ravishda `chat_id | https://t.me/+taklif_havolasi` formatida yuborishingiz mumkin. "
+        "Havola ko‘rsatilmasa, bot o‘zi taklif havolasini yaratadi.\n"
         "Bot o‘sha chatda administrator bo‘lishi kerak. Bekor qilish: /cancel"
     )
     await callback.answer()
@@ -378,23 +394,42 @@ async def save_linked_channel_or_group(
     if await deny_message(message, db, "channels", config):
         await state.clear()
         return
-    link = (message.text or "").strip()
-    username = public_chat_username(link)
-    if not username:
-        await message.answer("Havola noto‘g‘ri. Ommaviy https://t.me/username havolasini yuboring:")
-        return
     data = await state.get_data()
     expected_type = data.get("chat_type")
     if expected_type not in {"channel", "group"}:
         await state.clear()
         await message.answer("Qo‘shish jarayoni eskirgan. Menyudan qayta boshlang.")
         return
-    try:
-        chat = await bot.get_chat(f"@{username}")
-    except TelegramAPIError as error:
-        logger.warning("Chat havolasini tekshirib bo‘lmadi: username=%s error=%s", username, type(error).__name__)
+    value = (message.text or "").strip()
+    fields = [part.strip() for part in value.split("|", maxsplit=1)]
+    identifier = fields[0] if fields else ""
+    supplied_invite = private_chat_invite_link(fields[1]) if len(fields) == 2 else None
+    forwarded_chat = None
+    origin = message.forward_origin
+    if origin:
+        forwarded_chat = getattr(origin, "chat", None) or getattr(origin, "sender_chat", None)
+    username = public_chat_username(identifier)
+    if forwarded_chat is not None:
+        chat_id = forwarded_chat.id
+    elif username:
+        chat_id = f"@{username}"
+    elif identifier.lstrip("-").isdigit() and int(identifier) != 0:
+        chat_id = int(identifier)
+    else:
         await message.answer(
-            "Bu havola orqali kanal yoki guruh topilmadi. Ommaviy havolani va botning chatga qo‘shilganini tekshiring."
+            "Chat topilmadi. Ommaviy @username/havolasini yoki chat ID’sini yuboring. "
+            "Maxfiy chat ID’sini aniqlash uchun chatdagi xabarni forward qiling."
+        )
+        return
+    if len(fields) == 2 and supplied_invite is None:
+        await message.answer("Maxfiy taklif havolasi noto‘g‘ri. `https://t.me/+...` havolasini yuboring:")
+        return
+    try:
+        chat = await bot.get_chat(chat_id)
+    except TelegramAPIError as error:
+        logger.warning("Chatni tekshirib bo‘lmadi: chat=%s error=%s", chat_id, type(error).__name__)
+        await message.answer(
+            "Chat topilmadi. Chat ID/havolani va botning shu chatda ekanini tekshiring."
         )
         return
     actual_type = "channel" if chat.type == "channel" else "group" if chat.type in {"group", "supergroup"} else None
@@ -411,13 +446,29 @@ async def save_linked_channel_or_group(
     if bot_member.status not in {"administrator", "creator"}:
         await message.answer("Bot kanal yoki guruhda administrator emas. Avval botga administrator huquqini bering:")
         return
-    public_link = f"https://t.me/{username}"
+    chat_username = getattr(chat, "username", None)
+    chat_title = chat.title or chat_username or str(chat.id)
+    if chat_username:
+        invite_link = f"https://t.me/{chat_username}"
+    elif supplied_invite:
+        invite_link = supplied_invite
+    else:
+        try:
+            invite = await bot.create_chat_invite_link(chat_id=chat.id)
+        except TelegramAPIError as error:
+            logger.warning("Maxfiy chat havolasi yaratilmadi: chat_id=%s error=%s", chat.id, type(error).__name__)
+            await message.answer(
+                "Bot chatni tekshirdi, ammo taklif havolasi yarata olmadi. "
+                "Botga taklif havolasi yaratish huquqini bering yoki `chat_id | https://t.me/+...` yuboring."
+            )
+            return
+        invite_link = invite.invite_link
     try:
         await db.execute(
             "INSERT INTO channels(channel_id,channel_username,invite_link,chat_type,title) VALUES(?,?,?,?,?) "
             "ON CONFLICT(channel_id) DO UPDATE SET channel_username=excluded.channel_username,"
             "invite_link=excluded.invite_link,chat_type=excluded.chat_type,title=excluded.title,is_active=1",
-            (chat.id, username, public_link, actual_type, chat.title or username),
+            (chat.id, chat_username, invite_link, actual_type, chat_title),
         )
     except sqlite3.IntegrityError as error:
         logger.warning("Chat ro‘yxatga qo‘shilmadi: chat_id=%s error=%s", chat.id, type(error).__name__)
@@ -425,7 +476,7 @@ async def save_linked_channel_or_group(
         return
     await db.log_admin(message.from_user.id, f"{actual_type}_added", str(chat.id))
     await state.clear()
-    await message.answer(f"✅ {chat.title or username} majburiy obuna ro‘yxatiga qo‘shildi.")
+    await message.answer(f"✅ {chat_title} majburiy obuna ro‘yxatiga qo‘shildi.")
     await show_channel_management(message, db)
 
 
