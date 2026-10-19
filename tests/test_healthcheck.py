@@ -1,8 +1,11 @@
 import asyncio
 import unittest
+from unittest.mock import AsyncMock, Mock
 
 from bot import _handle_healthcheck, healthcheck_response
-from handlers.start import DEFAULT_WELCOME, welcome_with_code_prompt
+from config import Config
+from handlers.common import is_second_bot
+from handlers.start import DEFAULT_SERIES_WELCOME, DEFAULT_WELCOME, get_welcome, welcome_with_code_prompt
 from keyboards import admin_menu, main_menu, movie_menu
 from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
 
@@ -21,6 +24,36 @@ class HealthcheckTests(unittest.TestCase):
     def test_start_welcome_always_requests_a_movie_code_without_duplicating_it(self) -> None:
         self.assertEqual(welcome_with_code_prompt("Salom"), "Salom\n\n🎬 Kino kodini yuboring.")
         self.assertEqual(welcome_with_code_prompt(DEFAULT_WELCOME), DEFAULT_WELCOME)
+        self.assertEqual(welcome_with_code_prompt(DEFAULT_SERIES_WELCOME, "serial"), DEFAULT_SERIES_WELCOME)
+        self.assertEqual(
+            welcome_with_code_prompt("Salom, serial kodini yuboring", "serial"),
+            "Salom, serial kodini yuboring",
+        )
+        self.assertEqual(
+            welcome_with_code_prompt("Seriallar", "serial"),
+            "Seriallar\n\n🎬 Serial kodini yuboring.",
+        )
+
+    def test_second_bot_uses_its_own_serial_welcome(self) -> None:
+        config = Config("token-1", ("token-1", "token-2"), 1001, (1001,), "db.sqlite3", "INFO")
+        db = AsyncMock()
+        db.get_setting.side_effect = lambda key, default: default
+
+        async def get_messages() -> tuple[str, str]:
+            return (
+                await get_welcome(Mock(token="token-1"), db, config),
+                await get_welcome(Mock(token="token-2"), db, config),
+            )
+
+        first_welcome, second_welcome = asyncio.run(get_messages())
+        self.assertEqual(first_welcome, DEFAULT_WELCOME)
+        self.assertEqual(second_welcome, DEFAULT_SERIES_WELCOME)
+        self.assertFalse(is_second_bot(Mock(token="token-1"), config))
+        self.assertTrue(is_second_bot(Mock(token="token-2"), config))
+        self.assertEqual(
+            [call.args[0] for call in db.get_setting.await_args_list],
+            ["welcome_text", "series_welcome_text"],
+        )
 
     def test_second_bot_admin_menus_remain_visible(self) -> None:
         self.assertIsInstance(main_menu(is_admin=True), ReplyKeyboardMarkup)

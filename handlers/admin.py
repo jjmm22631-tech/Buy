@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 ADMIN_PERMISSIONS = ["movies", "users", "broadcast", "channels", "payments", "settings", "stats", "logs"]
 EDITABLE_SETTINGS = {
     "welcome_text": "Kutib olish xabari",
+    "series_welcome_text": "Serial botining kutib olish xabari",
     "not_found_text": "Kino topilmagandagi xabar",
     "subscription_text": "Majburiy obuna matni",
     "support_username": "Qo‘llab-quvvatlash username'i",
@@ -33,6 +34,7 @@ async def seed_admins(db: Database, config: Config) -> None:
         await db.add_admin(owner_id, "owner", ADMIN_PERMISSIONS, owner_id)
     defaults = {
         "welcome_text": "Assalomu alaykum! 👋\nUzbek Kinolar Olami botiga xush kelibsiz! 🎬\n\nSevimli kinolaringizni topish uchun kino kodini yuboring.",
+        "series_welcome_text": "Assalomu alaykum! 👋\nUzbek Tarjima Serialar Olami botiga xush kelibsiz! 🎬\n\nSevimli serialaringizni topish uchun serial kodini yuboring.",
         "not_found_text": "❌ Bunday koddagi kino topilmadi.\n\nIltimos, kodni tekshirib qayta yuboring.",
         "subscription_text": "❗ Botdan foydalanish uchun quyidagi kanallarga obuna bo‘ling.",
         "subscription_enabled": "1",

@@ -9,6 +9,10 @@ def is_series_bot(bot: Bot, config: Config) -> bool:
     return bot.token in config.bot_tokens
 
 
+def is_second_bot(bot: Bot, config: Config) -> bool:
+    return len(config.bot_tokens) > 1 and bot.token == config.bot_tokens[1]
+
+
 async def is_admin(db: Database, telegram_id: int, config: Config) -> bool:
     return telegram_id in config.admin_ids and await db.get_admin(telegram_id) is not None
 

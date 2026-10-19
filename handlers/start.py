@@ -8,7 +8,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 from config import Config
 from database import Database
-from handlers.common import is_series_bot
+from handlers.common import is_second_bot, is_series_bot
 from keyboards import main_menu, personal_menu, subscription_keyboard
 from telegram_commands import set_admin_commands
 
@@ -16,6 +16,11 @@ router = Router(name="start")
 logger = logging.getLogger(__name__)
 
 DEFAULT_WELCOME = "Assalomu alaykum! 👋\nUzbek Kinolar Olami botiga xush kelibsiz! 🎬\n\nSevimli kinolaringizni topish uchun kino kodini yuboring."
+DEFAULT_SERIES_WELCOME = (
+    "Assalomu alaykum! 👋\n"
+    "Uzbek Tarjima Serialar Olami botiga xush kelibsiz! 🎬\n\n"
+    "Sevimli serialaringizni topish uchun serial kodini yuboring."
+)
 DEFAULT_SUBSCRIPTION = "❗ Botdan foydalanish uchun quyidagi kanallarga obuna bo‘ling."
 
 
@@ -49,10 +54,20 @@ async def show_subscription_gate(message: Message, channels: list[dict], db: Dat
     await message.answer(text, reply_markup=subscription_keyboard(channels))
 
 
-def welcome_with_code_prompt(welcome: str) -> str:
-    if "kino kodini yuboring" in " ".join(welcome.casefold().split()):
+def welcome_with_code_prompt(welcome: str, code_name: str = "kino") -> str:
+    normalized = " ".join(welcome.casefold().split())
+    if f"{code_name} kodini yuboring" in normalized:
         return welcome
-    return f"{welcome.rstrip()}\n\n🎬 Kino kodini yuboring."
+    return f"{welcome.rstrip()}\n\n🎬 {code_name.capitalize()} kodini yuboring."
+
+
+async def get_welcome(bot: Bot, db: Database, config: Config) -> str:
+    if is_second_bot(bot, config):
+        welcome = await db.get_setting("series_welcome_text", DEFAULT_SERIES_WELCOME)
+        return welcome_with_code_prompt(welcome, "serial")
+    else:
+        welcome = await db.get_setting("welcome_text", DEFAULT_WELCOME)
+    return welcome_with_code_prompt(welcome)
 
 
 @router.message(CommandStart())
@@ -70,7 +85,7 @@ async def start_handler(message: Message, state: FSMContext, bot: Bot, db: Datab
     if not allowed:
         await show_subscription_gate(message, channels, db)
         return
-    welcome = welcome_with_code_prompt(await db.get_setting("welcome_text", DEFAULT_WELCOME))
+    welcome = await get_welcome(bot, db, config)
     payments_enabled = await db.get_setting("payments_enabled", "0") == "1"
     await message.answer(
         welcome,
@@ -90,7 +105,7 @@ async def subscription_check(callback: CallbackQuery, bot: Bot, db: Database, co
         await callback.answer("Obuna tasdiqlandi!")
         payments_enabled = await db.get_setting("payments_enabled", "0") == "1"
         await callback.message.answer(
-            welcome_with_code_prompt(await db.get_setting("welcome_text", DEFAULT_WELCOME)),
+            await get_welcome(bot, db, config),
             reply_markup=main_menu(
                 callback.from_user.id in config.admin_ids,
                 payments_enabled,

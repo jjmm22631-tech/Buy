@@ -39,6 +39,8 @@ Serial funksiyalari barcha sozlangan botlarda ishlaydi va bitta SQLite bazasidan
 
 Foydalanuvchi kino yoki serial kodini yoxud nomini yuborib qidiradi. Serial sahifasida ⭐ sevimlilarga saqlash va 🔔 yangi qismlar haqida bildirishnoma olish tugmalari mavjud. `/favorites` va `/subscriptions` saqlangan seriallarni ko‘rsatadi; `/search` qidiruvni boshlaydi. `/start` dagi inline menyu ham shu amallarni ochadi. Foydalanuvchilar uchun pastki reply paneli yashiriladi; to‘lov yoqilgan bo‘lsa, zarur `💳 To‘lov` tugmasi ko‘rsatiladi.
 
+`/start` har safar joriy suhbat jarayonini bekor qilib, kod yuborishni qayta so‘raydi. Birinchi bot kino salomlashuvini, ikkinchi bot serial salomlashuvini ko‘rsatadi. Admin `/set_welcome_text` va `/set_series_welcome_text` orqali ularni alohida o‘zgartirishi mumkin.
+
 ## Ishga tushirish
 
 ```bash
