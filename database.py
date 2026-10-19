@@ -142,6 +142,7 @@ class Database:
         await self.connection.commit()
         await self._migrate_movies()
         await self._migrate_series()
+        await self._migrate_channels()
 
     async def _migrate_movies(self) -> None:
         assert self.connection is not None
@@ -186,6 +187,21 @@ class Database:
         except Exception:
             await self.connection.rollback()
             raise
+
+    async def _migrate_channels(self) -> None:
+        assert self.connection is not None
+        cursor = await self.connection.execute("PRAGMA table_info(channels)")
+        columns = {row["name"] for row in await cursor.fetchall()}
+        if "chat_type" not in columns:
+            await self.connection.execute(
+                "ALTER TABLE channels ADD COLUMN chat_type TEXT NOT NULL DEFAULT 'channel'"
+            )
+        if "title" not in columns:
+            await self.connection.execute(
+                "ALTER TABLE channels ADD COLUMN title TEXT NOT NULL DEFAULT ''"
+            )
+        if "chat_type" not in columns or "title" not in columns:
+            await self.connection.commit()
 
     async def close(self) -> None:
         if self.connection is not None:

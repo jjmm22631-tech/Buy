@@ -39,7 +39,7 @@ class AdminManage(StatesGroup):
 
 
 class ChannelManage(StatesGroup):
-    add = State()
+    add_link = State()
 
 
 class UserManage(StatesGroup):

@@ -1,6 +1,9 @@
 import asyncio
 import json
 import logging
+import re
+import sqlite3
+from urllib.parse import urlsplit
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
@@ -14,7 +17,7 @@ from handlers.common import can, deny_callback, deny_message
 from handlers.states import (
     AdminManage, Broadcast, ChannelManage, PaymentSetup, SettingEdit, UserManage,
 )
-from keyboards import admin_menu, cancel_menu, confirm_keyboard, main_menu
+from keyboards import admin_menu, cancel_menu, channel_management_keyboard, confirm_keyboard, main_menu
 
 router = Router(name="admin")
 logger = logging.getLogger(__name__)
@@ -269,16 +272,149 @@ async def cancel_inline(callback: CallbackQuery, state: FSMContext) -> None:
 async def channels_menu(message: Message, db: Database, config: Config) -> None:
     if await deny_message(message, db, "channels", config):
         return
+    await show_channel_management(message, db)
+
+
+async def show_channel_management(message: Message, db: Database) -> None:
+    text, keyboard = await channel_management_view(db)
+    await message.answer(text, reply_markup=keyboard)
+
+
+async def channel_management_view(db: Database):
+    channels = await db.fetchall("SELECT * FROM channels WHERE is_active=1 ORDER BY id LIMIT 40")
+    total = await db.fetchone("SELECT COUNT(*) AS total FROM channels WHERE is_active=1")
     enabled = await db.get_setting("subscription_enabled", "1") == "1"
-    await message.answer(
-        f"📢 Majburiy obuna: {'yoqilgan' if enabled else 'o‘chirilgan'}\n\n"
-        "Kanal qo‘shish: /addchannel <ID> | <username> | <havola>\n"
-        "Kanallar: /channels\nObunani yoqish/o‘chirish: /subscription_toggle",
+    lines = [
+        f"📋 Ulangan kanallar va guruhlar\n"
+        f"Majburiy obuna: {'yoqilgan' if enabled else 'o‘chirilgan'}\n\n"
+        f"Ulangan chatlar: {total['total']}\n\n"
+        "Kanal yoki guruh qo‘shish uchun tugmani bosing va ommaviy havolasini yuboring.\n"
+        "Bot kanal yoki guruhda administrator bo‘lishi shart."
+        + ("\nO‘chirish tugmalari ro‘yxatdagi eng so‘nggi 40 ta chat uchun ko‘rsatilgan." if total["total"] > 40 else "")
+    ]
+    return "\n".join(lines), channel_management_keyboard([dict(row) for row in channels], enabled)
+
+
+def public_chat_username(link: str) -> str | None:
+    value = link.strip()
+    if re.fullmatch(r"@[A-Za-z0-9_]{5,32}", value):
+        return value[1:]
+    if not value.startswith(("https://", "http://")):
+        value = "https://" + value
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or parsed.hostname not in {"t.me", "www.t.me"}:
+        return None
+    path = parsed.path.strip("/")
+    if not re.fullmatch(r"[A-Za-z0-9_]{5,32}", path):
+        return None
+    return path
+
+
+@router.callback_query(F.data.startswith("channel:add:"))
+async def start_add_channel_or_group(
+    callback: CallbackQuery,
+    state: FSMContext,
+    db: Database,
+    config: Config,
+) -> None:
+    if await deny_callback(callback, db, "channels", config):
+        return
+    parts = (callback.data or "").split(":")
+    if len(parts) != 3 or parts[2] not in {"channel", "group"}:
+        await callback.answer("Noto‘g‘ri so‘rov.", show_alert=True)
+        return
+    await state.clear()
+    await state.update_data(chat_type=parts[2])
+    await state.set_state(ChannelManage.add_link)
+    await callback.message.answer(
+        f"{'Kanal' if parts[2] == 'channel' else 'Guruh'}ning ommaviy havolasini yuboring "
+        "(masalan, https://t.me/coder_company).\n"
+        "Bot o‘sha chatda administrator bo‘lishi kerak. Bekor qilish: /cancel"
     )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "channel:toggle")
+async def toggle_subscription_from_menu(
+    callback: CallbackQuery,
+    db: Database,
+    config: Config,
+) -> None:
+    if await deny_callback(callback, db, "channels", config):
+        return
+    current = await db.get_setting("subscription_enabled", "1") == "1"
+    value = "0" if current else "1"
+    await db.set_setting("subscription_enabled", value)
+    await db.log_admin(callback.from_user.id, "subscription_toggled", value)
+    text, keyboard = await channel_management_view(db)
+    await callback.message.edit_text(text, reply_markup=keyboard)
+    await callback.answer(f"Majburiy obuna {'yoqildi' if value == '1' else 'o‘chirildi'}.")
+
+
+@router.message(ChannelManage.add_link)
+async def save_linked_channel_or_group(
+    message: Message,
+    state: FSMContext,
+    db: Database,
+    config: Config,
+    bot: Bot,
+) -> None:
+    if await deny_message(message, db, "channels", config):
+        await state.clear()
+        return
+    link = (message.text or "").strip()
+    username = public_chat_username(link)
+    if not username:
+        await message.answer("Havola noto‘g‘ri. Ommaviy https://t.me/username havolasini yuboring:")
+        return
+    data = await state.get_data()
+    expected_type = data.get("chat_type")
+    if expected_type not in {"channel", "group"}:
+        await state.clear()
+        await message.answer("Qo‘shish jarayoni eskirgan. Menyudan qayta boshlang.")
+        return
+    try:
+        chat = await bot.get_chat(f"@{username}")
+    except TelegramAPIError as error:
+        logger.warning("Chat havolasini tekshirib bo‘lmadi: username=%s error=%s", username, type(error).__name__)
+        await message.answer(
+            "Bu havola orqali kanal yoki guruh topilmadi. Ommaviy havolani va botning chatga qo‘shilganini tekshiring."
+        )
+        return
+    actual_type = "channel" if chat.type == "channel" else "group" if chat.type in {"group", "supergroup"} else None
+    if actual_type != expected_type:
+        expected_label = "kanal" if expected_type == "channel" else "guruh"
+        await message.answer(f"Bu havola {expected_label} emas. To‘g‘ri chat havolasini yuboring:")
+        return
+    try:
+        bot_member = await bot.get_chat_member(chat.id, bot.id)
+    except TelegramAPIError as error:
+        logger.warning("Bot chatdagi huquqlarini tekshira olmadi: chat_id=%s error=%s", chat.id, type(error).__name__)
+        await message.answer("Bot bu chatni tekshira olmadi. Botni chatga qo‘shib, administrator qiling:")
+        return
+    if bot_member.status not in {"administrator", "creator"}:
+        await message.answer("Bot kanal yoki guruhda administrator emas. Avval botga administrator huquqini bering:")
+        return
+    public_link = f"https://t.me/{username}"
+    try:
+        await db.execute(
+            "INSERT INTO channels(channel_id,channel_username,invite_link,chat_type,title) VALUES(?,?,?,?,?) "
+            "ON CONFLICT(channel_id) DO UPDATE SET channel_username=excluded.channel_username,"
+            "invite_link=excluded.invite_link,chat_type=excluded.chat_type,title=excluded.title,is_active=1",
+            (chat.id, username, public_link, actual_type, chat.title or username),
+        )
+    except sqlite3.IntegrityError as error:
+        logger.warning("Chat ro‘yxatga qo‘shilmadi: chat_id=%s error=%s", chat.id, type(error).__name__)
+        await message.answer("Chatni ro‘yxatga saqlab bo‘lmadi. Ma’lumotlarni tekshirib qayta urinib ko‘ring.")
+        return
+    await db.log_admin(message.from_user.id, f"{actual_type}_added", str(chat.id))
+    await state.clear()
+    await message.answer(f"✅ {chat.title or username} majburiy obuna ro‘yxatiga qo‘shildi.")
+    await show_channel_management(message, db)
 
 
 @router.message(Command("addchannel"))
-async def add_channel(message: Message, db: Database, config: Config) -> None:
+async def add_channel(message: Message, db: Database, config: Config, bot: Bot) -> None:
     if await deny_message(message, db, "channels", config):
         return
     parts = (message.text or "").split(maxsplit=1)
@@ -288,12 +424,23 @@ async def add_channel(message: Message, db: Database, config: Config) -> None:
         return
     channel_id, username, link = int(fields[0]), fields[1].lstrip("@") or None, fields[2]
     try:
+        chat = await bot.get_chat(channel_id)
+        bot_member = await bot.get_chat_member(channel_id, bot.id)
+    except TelegramAPIError as error:
+        logger.warning("Kanal ID tekshirib bo‘lmadi: channel_id=%s error=%s", channel_id, type(error).__name__)
+        await message.answer("Kanal topilmadi yoki bot kanalni tekshira olmadi. Bot kanal admini ekanini tekshiring.")
+        return
+    if chat.type != "channel" or bot_member.status not in {"administrator", "creator"}:
+        await message.answer("Kanalda bot administrator bo‘lishi kerak. Kanal ID va huquqlarini tekshiring.")
+        return
+    try:
         await db.execute(
-            "INSERT INTO channels(channel_id,channel_username,invite_link) VALUES(?,?,?) "
-            "ON CONFLICT(channel_id) DO UPDATE SET channel_username=excluded.channel_username, invite_link=excluded.invite_link, is_active=1",
-            (channel_id, username, link),
+            "INSERT INTO channels(channel_id,channel_username,invite_link,chat_type,title) VALUES(?,?,?,'channel',?) "
+            "ON CONFLICT(channel_id) DO UPDATE SET channel_username=excluded.channel_username, "
+            "invite_link=excluded.invite_link,chat_type='channel',title=excluded.title,is_active=1",
+            (channel_id, username, link, chat.title or username or str(channel_id)),
         )
-    except Exception as error:
+    except sqlite3.IntegrityError as error:
         logger.warning("Kanal qo‘shilmadi: %s", type(error).__name__)
         await message.answer("Kanalni saqlab bo‘lmadi. Kanal ID va havolani tekshiring.")
         return
@@ -305,12 +452,29 @@ async def add_channel(message: Message, db: Database, config: Config) -> None:
 async def channel_list(message: Message, db: Database, config: Config) -> None:
     if await deny_message(message, db, "channels", config):
         return
-    channels = await db.fetchall("SELECT * FROM channels ORDER BY id")
-    if not channels:
-        await message.answer("Kanallar ro‘yxati bo‘sh.")
+    await show_channel_management(message, db)
+
+
+@router.callback_query(F.data.startswith("channel:delete:"))
+async def delete_linked_channel(callback: CallbackQuery, db: Database, config: Config) -> None:
+    if await deny_callback(callback, db, "channels", config):
         return
-    lines = [f"{row['id']}. {row['channel_id']} @{row['channel_username'] or 'username yo‘q'} — {row['invite_link']}" for row in channels]
-    await message.answer("📋 Kanallar:\n" + "\n".join(lines) + "\nO‘chirish: /delchannel <ID>")
+    parts = (callback.data or "").split(":")
+    if len(parts) != 3 or not parts[2].isdigit():
+        await callback.answer("Noto‘g‘ri so‘rov.", show_alert=True)
+        return
+    channel = await db.fetchone("SELECT channel_id,chat_type,title FROM channels WHERE id=?", (int(parts[2]),))
+    if not channel:
+        await callback.answer("Kanal yoki guruh topilmadi.", show_alert=True)
+        return
+    await db.execute("DELETE FROM channels WHERE id=?", (int(parts[2]),))
+    await db.log_admin(callback.from_user.id, f"{channel['chat_type']}_removed", str(channel["channel_id"]))
+    await callback.answer("Chat o‘chirildi.")
+    text, keyboard = await channel_management_view(db)
+    await callback.message.edit_text(
+        f"✅ {channel['title'] or channel['channel_id']} o‘chirildi.\n\n{text}",
+        reply_markup=keyboard,
+    )
 
 
 @router.message(Command("delchannel"))

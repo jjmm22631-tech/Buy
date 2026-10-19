@@ -8,10 +8,11 @@ from unittest.mock import AsyncMock
 
 from config import Config, _load_env_file
 from database import Database
+from handlers.admin import public_chat_username
 from handlers.common import can
 from handlers.movies import _notify_episode_subscribers, is_series_bot
 from keyboards import (
-    admin_menu, cancel_menu, main_menu, movie_menu, series_delete_episodes_keyboard,
+    admin_menu, cancel_menu, channel_management_keyboard, main_menu, movie_menu, series_delete_episodes_keyboard,
     series_episodes_keyboard, series_seasons_keyboard, title_search_keyboard,
 )
 from aiogram.types import ReplyKeyboardRemove
@@ -157,6 +158,32 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(episode["episode_number"], 3)
         self.assertEqual(episode["file_id"], "legacy-file")
 
+    async def test_channel_table_migrates_with_chat_type_and_title(self) -> None:
+        columns = {
+            row["name"]
+            for row in await self.db.fetchall("PRAGMA table_info(channels)")
+        }
+        self.assertIn("chat_type", columns)
+        self.assertIn("title", columns)
+
+    async def test_legacy_channels_migrate_without_losing_rows(self) -> None:
+        legacy_path = Path(self.temp_dir.name) / "legacy_channels.sqlite3"
+        with sqlite3.connect(legacy_path) as connection:
+            connection.executescript(
+                "CREATE TABLE channels (id INTEGER PRIMARY KEY, channel_id INTEGER UNIQUE, "
+                "channel_username TEXT, invite_link TEXT NOT NULL, is_active INTEGER DEFAULT 1);"
+                "INSERT INTO channels(id,channel_id,channel_username,invite_link) "
+                "VALUES(1,-100123,'old_channel','https://t.me/old_channel');"
+            )
+        legacy_db = Database(str(legacy_path))
+        await legacy_db.connect()
+        row = await legacy_db.fetchone("SELECT * FROM channels WHERE id=1")
+        await legacy_db.close()
+
+        self.assertEqual(row["chat_type"], "channel")
+        self.assertEqual(row["title"], "")
+        self.assertEqual(row["channel_username"], "old_channel")
+
     async def test_admin_permissions_and_audit_log(self) -> None:
         await self.db.add_admin(2002, "admin", ["movies"], 1001)
         admin = await self.db.get_admin(2002)
@@ -220,6 +247,26 @@ class MainMenuTests(unittest.TestCase):
 
         self.assertEqual(keyboard.inline_keyboard[0][0].text, "📁 2-mavsum")
         self.assertEqual(keyboard.inline_keyboard[0][0].callback_data, "series:season:42:2")
+
+    def test_public_chat_link_parser_accepts_public_links_only(self) -> None:
+        self.assertEqual(public_chat_username("https://t.me/coder_company"), "coder_company")
+        self.assertEqual(public_chat_username("@coder_company"), "coder_company")
+        self.assertIsNone(public_chat_username("https://t.me/+privateinvite"))
+        self.assertIsNone(public_chat_username("https://example.com/channel"))
+
+    def test_channel_management_lists_entries_and_add_actions(self) -> None:
+        keyboard = channel_management_keyboard(
+            [{"id": 2, "title": "Kanal", "channel_id": -1002}],
+            enabled=True,
+        )
+        buttons = [button for row in keyboard.inline_keyboard for button in row]
+        callbacks = {button.callback_data for button in buttons}
+        labels = {button.text for button in buttons}
+
+        self.assertIn("channel:delete:2", callbacks)
+        self.assertIn("channel:add:channel", callbacks)
+        self.assertIn("channel:add:group", callbacks)
+        self.assertTrue(any("Majburiy obunani o‘chirish" in label for label in labels))
 
     def test_series_actions_and_title_search_use_scoped_callbacks(self) -> None:
         seasons = series_seasons_keyboard(

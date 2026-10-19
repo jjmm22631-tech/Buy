@@ -147,11 +147,31 @@ def subscription_keyboard(channels: list[dict]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def channel_list_keyboard(channels: list[dict]) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"➖ O‘chirish: {channel['channel_id']}", callback_data=f"channel:delete:{channel['id']}")]
-        for channel in channels
-    ] or [[InlineKeyboardButton(text="Ro‘yxat bo‘sh", callback_data="noop")]])
+def channel_management_keyboard(
+    channels: list[dict],
+    enabled: bool,
+) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(
+            text=f"🗑 {'📢' if channel.get('chat_type', 'channel') == 'channel' else '👥'} "
+            f"{(channel.get('title') or channel.get('channel_username') or channel['channel_id'])[:40]}",
+            callback_data=f"channel:delete:{channel['id']}",
+        )]
+        for channel in channels[:40]
+    ]
+    if not channels:
+        rows.append([InlineKeyboardButton(text="Ro‘yxat bo‘sh", callback_data="noop")])
+    rows.extend([
+        [
+            InlineKeyboardButton(text="➕ Kanal qo‘shish", callback_data="channel:add:channel"),
+            InlineKeyboardButton(text="➕ Guruh qo‘shish", callback_data="channel:add:group"),
+        ],
+        [InlineKeyboardButton(
+            text=f"Majburiy obunani {'o‘chirish' if enabled else 'yoqish'}",
+            callback_data="channel:toggle",
+        )],
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def movie_edit_keyboard(movie_id: int) -> InlineKeyboardMarkup:

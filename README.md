@@ -51,15 +51,17 @@ Bot long polling ishlatadi. Bir token bilan bir vaqtda faqat bitta polling jaray
 
 ## Majburiy obuna
 
-Botni kanalga administrator qilib qo‘shing. Admin sifatida:
+Admin panelidagi **📢 Majburiy obuna** bo‘limini oching. **➕ Kanal qo‘shish** yoki **➕ Guruh qo‘shish** tugmasini bosib, chatning ommaviy `https://t.me/username` havolasini yuboring. Bot chatni topib, undagi administratorligini tekshiradi; faqat tekshiruvdan o‘tgach ro‘yxatga saqlaydi. Ulangan kanallar va guruhlar shu bo‘limda ko‘rinadi; har bir chatning yonidagi **🗑 O‘chirish** tugmasi uni ro‘yxatdan olib tashlaydi. Majburiy obunani shu bo‘limdan yoqish yoki o‘chirish mumkin.
+
+Botni tekshiriladigan har bir kanal yoki guruhga administrator qilib qo‘shing. Bot admin bo‘lmasa, chat saqlanmaydi. Maxfiy taklif havolasi yoki `t.me/c/...` manzilidan chat ID’sini olib tekshirish imkoni yo‘q; bunday holatda ommaviy `t.me/username` havolasidan foydalaning.
+
+Buyruqlar orqali boshqarish ham mumkin:
 
 ```text
 /addchannel -1001234567890 | kanal_username | https://t.me/kanal_username
 /channels
 /subscription_toggle
 ```
-
-Kanal havolasi ommaviy yoki taklif havolasi bo‘lishi mumkin. Bot `getChatMember` bilan tekshiradi; kanalga kira olmasa a’zolikni tasdiqlamaydi va xatoni logga yozadi.
 
 ## Admin huquqlari va to‘lov
 
