@@ -528,13 +528,15 @@ async def start_add_channel_or_group(
     if visibility == "public":
         prompt = (
             f"📢 Ommaviy {'kanal' if chat_type == 'channel' else 'guruh'}ni qo‘shish uchun "
-            "@username yoki https://t.me/username havolasini yuboring."
+            "@username yoki https://t.me/username havolasini yuboring. "
+            "Maxsus taklif havolasi, jumladan join-request havolasi bo‘lsa, "
+            "`@username | https://t.me/+...` shaklida yuboring."
         )
     else:
         prompt = (
             f"🔒 Yopiq {'kanal' if chat_type == 'channel' else 'guruh'}ni qo‘shish uchun chat ID’sini yuboring "
             "yoki o‘sha chatdagi xabarni botga forward qiling.\n"
-            "Ixtiyoriy taklif havolasi bilan: `chat_id | https://t.me/+...` formatida yuboring. "
+            "Taklif havolasi bilan: `chat_id | https://t.me/+...` formatida yuboring. "
             "Bot chat ID’siz taklif havolasini tekshira olmaydi."
         )
     await callback.message.answer(
@@ -582,14 +584,23 @@ async def save_linked_channel_or_group(
     value = (message.text or "").strip()
     fields = [part.strip() for part in value.split("|", maxsplit=1)]
     identifier = fields[0] if fields else ""
-    supplied_invite = private_chat_invite_link(fields[1]) if len(fields) == 2 else None
+    supplied_invite = None
+    if len(fields) == 2:
+        supplied_invite = private_chat_invite_link(fields[1])
+        supplied_public_username = public_chat_username(fields[1])
+        if supplied_invite is None and supplied_public_username:
+            supplied_invite = f"https://t.me/{supplied_public_username}"
     forwarded_chat = None
     origin = message.forward_origin
     if origin:
         forwarded_chat = getattr(origin, "chat", None) or getattr(origin, "sender_chat", None)
     username = public_chat_username(identifier)
-    if visibility == "public" and not username:
-        await message.answer("Ommaviy chat uchun @username yoki https://t.me/username havolasini yuboring:")
+    numeric_chat_id = re.fullmatch(r"-?\d+", identifier) is not None and int(identifier) != 0
+    if visibility == "public" and not username and not (numeric_chat_id and supplied_invite):
+        await message.answer(
+            "Ommaviy chat uchun @username yoki https://t.me/username havolasini yuboring. "
+            "Maxsus taklif havolasi uchun `@username | https://t.me/+...` formatidan foydalaning:"
+        )
         return
     if visibility == "private" and username:
         await message.answer("Yopiq chat uchun chat ID’sini yuboring yoki chatdagi xabarni forward qiling:")
@@ -598,7 +609,7 @@ async def save_linked_channel_or_group(
         chat_id = forwarded_chat.id
     elif username and visibility == "public":
         chat_id = f"@{username}"
-    elif identifier.lstrip("-").isdigit() and int(identifier) != 0:
+    elif numeric_chat_id:
         chat_id = int(identifier)
     else:
         await message.answer(
@@ -607,7 +618,9 @@ async def save_linked_channel_or_group(
         )
         return
     if len(fields) == 2 and supplied_invite is None:
-        await message.answer("Maxfiy taklif havolasi noto‘g‘ri. `https://t.me/+...` havolasini yuboring:")
+        await message.answer(
+            "Taklif havolasi noto‘g‘ri. `https://t.me/username` yoki `https://t.me/+...` havolasini yuboring:"
+        )
         return
     try:
         chat = await bot.get_chat(chat_id)
@@ -633,10 +646,10 @@ async def save_linked_channel_or_group(
         return
     chat_username = getattr(chat, "username", None)
     chat_title = chat.title or chat_username or str(chat.id)
-    if chat_username:
-        invite_link = f"https://t.me/{chat_username}"
-    elif supplied_invite:
+    if supplied_invite:
         invite_link = supplied_invite
+    elif chat_username:
+        invite_link = f"https://t.me/{chat_username}"
     else:
         try:
             invite = await bot.create_chat_invite_link(chat_id=chat.id)

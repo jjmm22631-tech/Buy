@@ -328,6 +328,47 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
         bot.create_chat_invite_link.assert_awaited_once_with(chat_id=-100123)
         state.clear.assert_awaited_once()
 
+    async def test_custom_join_request_invite_is_preserved_for_public_chat(self) -> None:
+        await self.db.add_admin(1001, "owner", ["channels"], 1001)
+        request_link = "https://t.me/+join-request-invite"
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=1001),
+            text=f"@public_channel | {request_link}",
+            forward_origin=None,
+            answer=AsyncMock(),
+        )
+        state = SimpleNamespace(
+            get_data=AsyncMock(return_value={"chat_type": "channel", "visibility": "public"}),
+            clear=AsyncMock(),
+        )
+        chat = SimpleNamespace(
+            id=-100123,
+            type="channel",
+            username="public_channel",
+            title="Ommaviy kanal",
+        )
+        bot = SimpleNamespace(
+            id=9001,
+            get_chat=AsyncMock(return_value=chat),
+            get_chat_member=AsyncMock(return_value=SimpleNamespace(status="administrator")),
+            create_chat_invite_link=AsyncMock(),
+        )
+        config = Config("token", ("token",), 1001, (1001,), "db.sqlite3", "INFO")
+
+        await save_linked_channel_or_group(message, state, self.db, config, bot)
+
+        channel = await self.db.fetchone(
+            "SELECT * FROM bot_channels WHERE bot_id=9001 AND channel_id=-100123"
+        )
+        self.assertEqual(channel["invite_link"], request_link)
+        bot.create_chat_invite_link.assert_not_awaited()
+
+        bot.get_chat_member = AsyncMock(return_value=SimpleNamespace(status="left", is_member=False))
+        allowed, missing = await subscription_status(bot, self.db, 1002)
+
+        self.assertFalse(allowed)
+        self.assertEqual(missing[0]["invite_link"], request_link)
+
     async def test_mandatory_subscription_requires_membership_in_every_chat(self) -> None:
         await self.db.execute(
             "INSERT INTO bot_channels(bot_id,channel_id,channel_username,invite_link,chat_type,title) VALUES(?,?,?,?,?,?)",
