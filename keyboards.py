@@ -1,4 +1,16 @@
+from typing import Literal
+
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
+
+
+def inline_button(
+    text: str,
+    *,
+    callback_data: str | None = None,
+    url: str | None = None,
+    style: Literal["primary", "success", "danger"] = "success",
+) -> InlineKeyboardButton:
+    return InlineKeyboardButton(text=text, callback_data=callback_data, url=url, style=style)
 
 
 def main_menu(
@@ -57,16 +69,16 @@ def series_seasons_keyboard(
     subscribed: bool = False,
 ) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text=f"📁 {season['season_number']}-mavsum", callback_data=f"series:season:{request_id}:{season['season_number']}")]
+        [inline_button(text=f"📁 {season['season_number']}-mavsum", callback_data=f"series:season:{request_id}:{season['season_number']}")]
         for season in seasons
     ]
     if series_id is not None:
         rows.append([
-            InlineKeyboardButton(
+            inline_button(
                 text="⭐ Sevimlidan olib tashlash" if is_favorite else "⭐ Sevimlilarga qo‘shish",
                 callback_data=f"series:favorite:{request_id}:{series_id}",
             ),
-            InlineKeyboardButton(
+            inline_button(
                 text="🔕 Bildirishnomani o‘chirish" if subscribed else "🔔 Yangi qismlarga obuna",
                 callback_data=f"series:subscribe:{request_id}:{series_id}",
             ),
@@ -76,14 +88,14 @@ def series_seasons_keyboard(
 
 def series_episodes_keyboard(episodes: list[dict], request_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"▶️ {episode['episode_number']}-qism", callback_data=f"series:episode:{request_id}:{episode['id']}")]
+        [inline_button(text=f"▶️ {episode['episode_number']}-qism", callback_data=f"series:episode:{request_id}:{episode['id']}")]
         for episode in episodes
     ])
 
 
 def title_search_keyboard(results: list[dict], request_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
+        [inline_button(
             text=f"{'📺' if result['kind'] == 'series' else '🎬'} {result['title'][:50]}",
             callback_data=f"search:{result['kind']}:{request_id}:{result['id']}",
         )]
@@ -93,9 +105,10 @@ def title_search_keyboard(results: list[dict], request_id: int) -> InlineKeyboar
 
 def series_delete_episodes_keyboard(episodes: list[dict]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
+        [inline_button(
             text=f"🗑 {episode['season_number']}-mavsum {episode['episode_number']}-qism",
             callback_data=f"series:deleteepisode:{episode['id']}",
+            style="danger",
         )]
         for episode in episodes
     ])
@@ -103,7 +116,7 @@ def series_delete_episodes_keyboard(episodes: list[dict]) -> InlineKeyboardMarku
 
 def series_library_keyboard(series: list[dict]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
+        [inline_button(
             text=f"📺 {item['title'][:50]}",
             callback_data=f"library:open:{item['id']}",
         )]
@@ -113,9 +126,9 @@ def series_library_keyboard(series: list[dict]) -> InlineKeyboardMarkup:
 
 def personal_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⭐ Sevimlilarim", callback_data="library:favorites")],
-        [InlineKeyboardButton(text="🔔 Obunalarim", callback_data="library:subscriptions")],
-        [InlineKeyboardButton(text="🔍 Kino yoki serial qidirish", callback_data="library:search")],
+        [inline_button(text="⭐ Sevimlilarim", callback_data="library:favorites")],
+        [inline_button(text="🔔 Obunalarim", callback_data="library:subscriptions")],
+        [inline_button(text="🔍 Kino yoki serial qidirish", callback_data="library:search")],
     ])
 
 
@@ -131,8 +144,8 @@ def cancel_menu(hide_keyboard: bool = False) -> ReplyKeyboardMarkup | ReplyKeybo
 def confirm_keyboard(yes: str, no: str = "cancel") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[
-            InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=yes),
-            InlineKeyboardButton(text="❌ Bekor qilish", callback_data=no),
+            inline_button(text="✅ Tasdiqlash", callback_data=yes),
+            inline_button(text="❌ Bekor qilish", callback_data=no, style="danger"),
         ]]
     )
 
@@ -142,9 +155,15 @@ def subscription_keyboard(channels: list[dict]) -> InlineKeyboardMarkup:
     for index, channel in enumerate(channels, start=1):
         link = channel.get("invite_link") or (f"https://t.me/{channel['channel_username'].lstrip('@')}" if channel.get("channel_username") else "")
         if link:
-            rows.append([InlineKeyboardButton(text=f"📢 {index}-kanalga obuna bo‘lish", url=link)])
-    rows.append([InlineKeyboardButton(text="✅ Obunani tekshirish", callback_data="subscription:check")])
+            rows.append([inline_button(text=f"📢 {index}-kanalga obuna bo‘lish", url=link)])
+    rows.append([inline_button(text="✅ Obunani tekshirish", callback_data="subscription:check")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def access_invite_keyboard(invite_link: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [inline_button(text="✅ Guruhga so‘rov yuborish", url=invite_link)],
+    ])
 
 
 def channel_management_keyboard(
@@ -152,21 +171,22 @@ def channel_management_keyboard(
     enabled: bool,
 ) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(
+        [inline_button(
             text=f"🗑 {'📢' if channel.get('chat_type', 'channel') == 'channel' else '👥'} "
             f"{(channel.get('title') or channel.get('channel_username') or channel['channel_id'])[:40]}",
             callback_data=f"channel:delete:{channel['id']}",
+            style="danger",
         )]
         for channel in channels[:40]
     ]
     if not channels:
-        rows.append([InlineKeyboardButton(text="Ro‘yxat bo‘sh", callback_data="noop")])
+        rows.append([inline_button(text="Ro‘yxat bo‘sh", callback_data="noop")])
     rows.extend([
         [
-            InlineKeyboardButton(text="➕ Kanal qo‘shish", callback_data="channel:add:channel"),
-            InlineKeyboardButton(text="➕ Guruh qo‘shish", callback_data="channel:add:group"),
+            inline_button(text="➕ Kanal qo‘shish", callback_data="channel:add:channel"),
+            inline_button(text="➕ Guruh qo‘shish", callback_data="channel:add:group"),
         ],
-        [InlineKeyboardButton(
+        [inline_button(
             text=f"Majburiy obunani {'o‘chirish' if enabled else 'yoqish'}",
             callback_data="channel:toggle",
         )],
@@ -180,13 +200,13 @@ def movie_edit_keyboard(movie_id: int) -> InlineKeyboardMarkup:
         ("Video", "file"), ("Qo‘shimcha matn", "extra_text"),
     ]
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=label, callback_data=f"movie:edit:{movie_id}:{field}")]
+        [inline_button(text=label, callback_data=f"movie:edit:{movie_id}:{field}")]
         for label, field in fields
     ])
 
 
 def payment_methods_keyboard(methods: list[str]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=method, callback_data=f"payment:method:{index}")]
+        [inline_button(text=method, callback_data=f"payment:method:{index}")]
         for index, method in enumerate(methods)
     ])

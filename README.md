@@ -63,6 +63,14 @@ Buyruqlar orqali boshqarish ham mumkin:
 /subscription_toggle
 ```
 
+## Botdan foydalanish uchun guruh so‘rovi
+
+Ixtiyoriy ravishda `ACCESS_GROUP_ID` sozlamasiga botdan foydalanish ruxsatini beradigan aniq guruhning manfiy Telegram ID’sini kiriting. Botni shu guruhga administrator qilib qo‘shing. Admin `/accesslink` buyrug‘i bilan `creates_join_request=True` taklif havolasi yaratib, foydalanuvchilarga tarqatadi. Sozlama bo‘lmaganda, bu qo‘shimcha ruxsat tekshiruvi ishlamaydi va avvalgi bot xatti-harakati saqlanadi.
+
+Faqat `ACCESS_GROUP_ID` bilan mos kelgan guruhdan botga kelgan haqiqiy join-request yangilanishi foydalanuvchining Telegram ID’sini ruxsatlar bazasiga yozadi. Bot `/start` va boshqa foydalanuvchi amallarida shu ruxsatni tekshiradi. Bu ruxsat guruhga a’zo bo‘lishni tasdiqlamaydi yoki foydalanuvchini guruhga avtomatik qo‘shmaydi; guruh admini so‘rovni rad qilgan taqdirda ham bot ruxsati saqlanadi.
+
+Inline tugmalar qo‘llab-quvvatlaydigan Telegram mijozlarida muvaffaqiyatli amallar `success`, bekor qilish/rad etish/o‘chirish amallari esa `danger` uslubida ko‘rinadi.
+
 ## Admin huquqlari va to‘lov
 
 `.env` dagi owner ID’lari dastlabki ishga tushishda bazaga yoziladi. Asosiy admin `/addadmin`, `/removeadmin`, `/admins` va `/findadmin` buyruqlaridan foydalanishi mumkin. Qo‘lda to‘lov uchun admin panelidagi `💳 To‘lov sozlamalari` ko‘rsatmalaridan foydalaning; foydalanuvchining to‘lov dalili adminlarga keladi va admin tasdiqlamaguncha holat `pending` bo‘lib qoladi. Bot uchinchi tomon to‘lovini avtomatik amalga oshirmaydi.

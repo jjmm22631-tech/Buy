@@ -21,6 +21,7 @@ def admin_commands(series_enabled: bool) -> list[BotCommand]:
     commands = [
         BotCommand(command="start", description="Botni boshlash"),
         BotCommand(command="admin", description="Admin paneli"),
+        BotCommand(command="accesslink", description="Guruhga so‘rov havolasini yaratish"),
         BotCommand(command="search", description="Kino yoki serial qidirish"),
         BotCommand(command="favorites", description="Sevimli seriallar"),
         BotCommand(command="subscriptions", description="Serial obunalari"),

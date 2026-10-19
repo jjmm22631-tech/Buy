@@ -3,7 +3,7 @@ import logging
 from aiogram import Bot, F, Router
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, ChatJoinRequest, Message
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 from config import Config
@@ -96,6 +96,29 @@ async def start_handler(message: Message, state: FSMContext, bot: Bot, db: Datab
         ),
     )
     await message.answer("Kerakli bo‘limni tanlang:", reply_markup=personal_menu())
+
+
+@router.chat_join_request()
+async def chat_join_request_handler(
+    request: ChatJoinRequest,
+    db: Database,
+    config: Config,
+) -> None:
+    invite_link = request.invite_link
+    if (
+        config.access_group_id is None
+        or request.chat.id != config.access_group_id
+        or invite_link is None
+        or invite_link.creates_join_request is not True
+    ):
+        logger.warning(
+            "Bot ruxsat so‘rovi rad etildi: user_id=%s chat_id=%s",
+            request.from_user.id,
+            request.chat.id,
+        )
+        return
+    await db.grant_bot_access(request.from_user.id, request.chat.id)
+    logger.info("Botdan foydalanish ruxsati berildi: user_id=%s chat_id=%s", request.from_user.id, request.chat.id)
 
 
 @router.callback_query(F.data == "subscription:check")

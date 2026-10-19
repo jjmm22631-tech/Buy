@@ -464,6 +464,45 @@ async def add_channel(message: Message, db: Database, config: Config, bot: Bot) 
     await message.answer("✅ Kanal majburiy obunaga qo‘shildi. A’zolikni tekshirish uchun bot kanal administratori bo‘lishi kerak.")
 
 
+@router.message(Command("accesslink"))
+async def create_access_link(message: Message, db: Database, config: Config, bot: Bot) -> None:
+    if await deny_message(message, db, "channels", config):
+        return
+    if config.access_group_id is None:
+        await message.answer("ACCESS_GROUP_ID sozlanmagan. Guruh ID’sini .env fayliga kiriting va botni qayta ishga tushiring.")
+        return
+    try:
+        chat = await bot.get_chat(config.access_group_id)
+        if chat.type not in {"group", "supergroup"}:
+            await message.answer("ACCESS_GROUP_ID guruh yoki superguruh ID’si bo‘lishi kerak.")
+            return
+        bot_member = await bot.get_chat_member(config.access_group_id, bot.id)
+        if bot_member.status not in {"administrator", "creator"}:
+            await message.answer("Bot ruxsat so‘rovi havolasini yaratish uchun ulangan guruhda administrator bo‘lishi kerak.")
+            return
+        invite = await bot.create_chat_invite_link(
+            chat_id=config.access_group_id,
+            creates_join_request=True,
+        )
+    except TelegramAPIError as error:
+        logger.warning(
+            "Botga ruxsat havolasi yaratilmadi: chat_id=%s error=%s",
+            config.access_group_id,
+            type(error).__name__,
+        )
+        await message.answer("Guruh havolasini yaratib bo‘lmadi. Guruh ID’si va botning admin huquqlarini tekshiring.")
+        return
+    if invite.creates_join_request is not True:
+        raise RuntimeError("Telegram qaytargan taklif havolasi join request talab qilmaydi.")
+    await db.set_setting("access_invite_link", invite.invite_link)
+    await db.log_admin(message.from_user.id, "access_invite_created", str(config.access_group_id))
+    await message.answer(
+        "✅ Botdan foydalanish uchun ruxsat beradigan havola:\n"
+        f"{invite.invite_link}\n\n"
+        "So‘rov bot ruxsatini beradi, lekin foydalanuvchini guruhga avtomatik qo‘shmaydi."
+    )
+
+
 @router.message(Command("channels"))
 async def channel_list(message: Message, db: Database, config: Config) -> None:
     if await deny_message(message, db, "channels", config):

@@ -8,12 +8,13 @@ from unittest.mock import AsyncMock
 
 from config import Config, _load_env_file
 from database import Database
-from handlers.admin import public_chat_username
+from handlers.admin import create_access_link, public_chat_username
 from handlers.common import can
 from handlers.movies import _notify_episode_subscribers, is_series_bot
+from handlers.start import chat_join_request_handler
 from keyboards import (
-    admin_menu, cancel_menu, channel_management_keyboard, main_menu, movie_menu, series_delete_episodes_keyboard,
-    series_episodes_keyboard, series_seasons_keyboard, title_search_keyboard,
+    admin_menu, cancel_menu, channel_management_keyboard, confirm_keyboard, main_menu, movie_menu,
+    series_delete_episodes_keyboard, series_episodes_keyboard, series_seasons_keyboard, title_search_keyboard,
 )
 from aiogram.types import ReplyKeyboardRemove
 from types import SimpleNamespace
@@ -192,6 +193,69 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
         log = await self.db.fetchone("SELECT * FROM admin_logs WHERE admin_id=?", (1001,))
         self.assertEqual(log["action"], "admin_added")
 
+    async def test_bot_access_requires_real_join_request_for_configured_group(self) -> None:
+        config = Config("token", ("token",), 1001, (1001,), "db.sqlite3", "INFO", -100123)
+        valid_request = SimpleNamespace(
+            chat=SimpleNamespace(id=-100123),
+            from_user=SimpleNamespace(id=2002),
+            invite_link=SimpleNamespace(creates_join_request=True),
+        )
+        wrong_group_request = SimpleNamespace(
+            chat=SimpleNamespace(id=-100999),
+            from_user=SimpleNamespace(id=2003),
+            invite_link=SimpleNamespace(creates_join_request=True),
+        )
+        non_request_invite = SimpleNamespace(
+            chat=SimpleNamespace(id=-100123),
+            from_user=SimpleNamespace(id=2004),
+            invite_link=SimpleNamespace(creates_join_request=False),
+        )
+        missing_invite = SimpleNamespace(
+            chat=SimpleNamespace(id=-100123),
+            from_user=SimpleNamespace(id=2005),
+            invite_link=None,
+        )
+
+        await chat_join_request_handler(wrong_group_request, self.db, config)
+        await chat_join_request_handler(non_request_invite, self.db, config)
+        await chat_join_request_handler(missing_invite, self.db, config)
+        self.assertFalse(await self.db.has_bot_access(2003))
+        self.assertFalse(await self.db.has_bot_access(2004))
+        self.assertFalse(await self.db.has_bot_access(2005))
+
+        await chat_join_request_handler(valid_request, self.db, config)
+
+        self.assertTrue(await self.db.has_bot_access(2002))
+        access = await self.db.fetchone("SELECT source_chat_id FROM bot_access WHERE telegram_id=?", (2002,))
+        self.assertEqual(access["source_chat_id"], -100123)
+
+    async def test_access_link_uses_join_request_invite_and_persists_it(self) -> None:
+        await self.db.add_admin(1001, "owner", ["channels"], 1001)
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=1001),
+            answer=AsyncMock(),
+        )
+        bot = SimpleNamespace(
+            id=9001,
+            get_chat=AsyncMock(return_value=SimpleNamespace(type="supergroup")),
+            get_chat_member=AsyncMock(return_value=SimpleNamespace(status="administrator")),
+            create_chat_invite_link=AsyncMock(
+                return_value=SimpleNamespace(
+                    creates_join_request=True,
+                    invite_link="https://t.me/+request-link",
+                )
+            ),
+        )
+        config = Config("token", ("token",), 1001, (1001,), "db.sqlite3", "INFO", -100123)
+
+        await create_access_link(message, self.db, config, bot)
+
+        bot.create_chat_invite_link.assert_awaited_once_with(
+            chat_id=-100123,
+            creates_join_request=True,
+        )
+        self.assertEqual(await self.db.get_setting("access_invite_link"), "https://t.me/+request-link")
+
     async def test_admin_access_requires_configured_telegram_id(self) -> None:
         config = Config("token", ("token",), 1001, (1001, 3003, 4004), "db.sqlite3", "INFO")
         await self.db.add_admin(2002, "admin", ["movies"], 1001)
@@ -247,6 +311,13 @@ class MainMenuTests(unittest.TestCase):
 
         self.assertEqual(keyboard.inline_keyboard[0][0].text, "📁 2-mavsum")
         self.assertEqual(keyboard.inline_keyboard[0][0].callback_data, "series:season:42:2")
+        self.assertEqual(keyboard.inline_keyboard[0][0].style, "success")
+
+    def test_inline_confirmation_uses_success_and_danger_styles(self) -> None:
+        buttons = confirm_keyboard("yes").inline_keyboard[0]
+
+        self.assertEqual(buttons[0].style, "success")
+        self.assertEqual(buttons[1].style, "danger")
 
     def test_public_chat_link_parser_accepts_public_links_only(self) -> None:
         self.assertEqual(public_chat_username("https://t.me/coder_company"), "coder_company")
@@ -311,7 +382,7 @@ class ConfigTests(unittest.TestCase):
                     os.environ["OWNER_IDS"] = previous_owners
 
     def test_load_config_supports_multiple_bot_tokens(self) -> None:
-        keys = ("BOT_TOKEN", "BOT_TOKEN_2", "BOT_TOKEN_3", "BOT_TOKENS", "OWNER_IDS")
+        keys = ("BOT_TOKEN", "BOT_TOKEN_2", "BOT_TOKEN_3", "BOT_TOKENS", "OWNER_IDS", "ACCESS_GROUP_ID")
         previous = {key: os.environ.get(key) for key in keys}
         try:
             os.environ["BOT_TOKEN"] = "primary-token"
@@ -319,10 +390,12 @@ class ConfigTests(unittest.TestCase):
             os.environ.pop("BOT_TOKEN_3", None)
             os.environ["BOT_TOKENS"] = "third-token,fourth-token"
             os.environ["OWNER_IDS"] = "100"
+            os.environ["ACCESS_GROUP_ID"] = "-1001234567890"
             from config import load_config
 
             config = load_config()
             self.assertEqual(config.bot_tokens, ("primary-token", "third-token", "fourth-token", "second-token"))
+            self.assertEqual(config.access_group_id, -1001234567890)
         finally:
             for key, value in previous.items():
                 if value is None:

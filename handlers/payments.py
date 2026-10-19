@@ -4,13 +4,13 @@ import logging
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from config import Config
 from database import Database
 from handlers.start import register_user, show_subscription_gate, subscription_status
 from handlers.states import PaymentProof
-from keyboards import payment_methods_keyboard
+from keyboards import inline_button, payment_methods_keyboard
 
 router = Router(name="payments")
 logger = logging.getLogger(__name__)
@@ -99,8 +99,8 @@ async def payment_proof(message: Message, state: FSMContext, db: Database, bot: 
     )
     await state.clear()
     review_markup = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"payment:review:{payment_id}:approve"),
-        InlineKeyboardButton(text="❌ Rad etish", callback_data=f"payment:review:{payment_id}:reject"),
+        inline_button(text="✅ Tasdiqlash", callback_data=f"payment:review:{payment_id}:approve"),
+        inline_button(text="❌ Rad etish", callback_data=f"payment:review:{payment_id}:reject", style="danger"),
     ]])
     delivered = 0
     for admin_id in config.admin_ids:

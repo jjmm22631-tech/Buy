@@ -16,6 +16,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from config import Config, load_config
 from database import Database
 from handlers import admin, movies, payments, start
+from keyboards import access_invite_keyboard
 from telegram_commands import admin_commands, public_commands, set_admin_commands
 
 
@@ -65,7 +66,12 @@ class AvailabilityMiddleware(BaseMiddleware):
         db: Database = data["db"]
         message = event.message
         callback = event.callback_query
-        user = callback.from_user if callback else message.from_user if message else None
+        join_request = event.chat_join_request
+        user = (
+            callback.from_user if callback else
+            message.from_user if message else
+            join_request.from_user if join_request else None
+        )
         if user is None:
             return await handler(event, data)
         await db.execute(
@@ -88,6 +94,27 @@ class AvailabilityMiddleware(BaseMiddleware):
                     await message.answer("🚫 Botdan foydalanishingiz cheklangan. Admin bilan bog‘laning.")
                 elif callback:
                     await callback.answer("Botdan foydalanishingiz cheklangan.", show_alert=True)
+                return None
+            if (
+                data["config"].access_group_id is not None
+                and not join_request
+                and not await db.has_bot_access(user.id)
+            ):
+                invite_link = await db.get_setting("access_invite_link")
+                text = (
+                    "🔐 Botdan foydalanish uchun ulangan guruhga qo‘shilish so‘rovini yuboring. "
+                    "Guruhga a’zo bo‘lish shart emas; so‘rov botga ruxsat beradi."
+                )
+                if invite_link:
+                    markup = access_invite_keyboard(invite_link)
+                else:
+                    text += "\nTaklif havolasini olish uchun bot adminiga murojaat qiling."
+                    markup = None
+                if message:
+                    await message.answer(text, reply_markup=markup)
+                elif callback:
+                    await callback.answer("Botdan foydalanish uchun avval guruhga so‘rov yuboring.", show_alert=True)
+                    await callback.message.answer(text, reply_markup=markup)
                 return None
         return await handler(event, data)
 

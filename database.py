@@ -91,6 +91,11 @@ class Database:
                 invite_link TEXT NOT NULL,
                 is_active INTEGER NOT NULL DEFAULT 1
             );
+            CREATE TABLE IF NOT EXISTS bot_access (
+                telegram_id INTEGER PRIMARY KEY,
+                source_chat_id INTEGER NOT NULL,
+                granted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
             CREATE TABLE IF NOT EXISTS settings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 key TEXT NOT NULL UNIQUE,
@@ -240,6 +245,17 @@ class Database:
     async def get_setting(self, key: str, default: str = "") -> str:
         row = await self.fetchone("SELECT value FROM settings WHERE key=?", (key,))
         return row["value"] if row else default
+
+    async def grant_bot_access(self, telegram_id: int, source_chat_id: int) -> None:
+        await self.execute(
+            "INSERT INTO bot_access(telegram_id,source_chat_id) VALUES(?,?) "
+            "ON CONFLICT(telegram_id) DO UPDATE SET source_chat_id=excluded.source_chat_id",
+            (telegram_id, source_chat_id),
+        )
+
+    async def has_bot_access(self, telegram_id: int) -> bool:
+        row = await self.fetchone("SELECT 1 FROM bot_access WHERE telegram_id=?", (telegram_id,))
+        return row is not None
 
     async def add_admin(self, telegram_id: int, role: str, permissions: list[str], added_by: int) -> None:
         await self.execute(

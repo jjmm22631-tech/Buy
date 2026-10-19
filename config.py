@@ -12,6 +12,7 @@ class Config:
     admin_ids: tuple[int, ...]
     database_path: str
     log_level: str
+    access_group_id: int | None = None
 
 
 def _load_env_file(path: Path = Path(".env")) -> None:
@@ -58,6 +59,14 @@ def load_config() -> Config:
     if not admin_ids or any(admin_id <= 0 for admin_id in admin_ids):
         raise RuntimeError(".env faylida kamida bitta musbat OWNER_IDS yoki MAIN_ADMIN_ID bo‘lishi kerak.")
 
+    raw_access_group_id = os.getenv("ACCESS_GROUP_ID", "").strip()
+    try:
+        access_group_id = int(raw_access_group_id) if raw_access_group_id else None
+    except ValueError as error:
+        raise RuntimeError("ACCESS_GROUP_ID guruhning manfiy Telegram ID raqami bo‘lishi kerak.") from error
+    if access_group_id is not None and access_group_id >= 0:
+        raise RuntimeError("ACCESS_GROUP_ID guruhning manfiy Telegram ID raqami bo‘lishi kerak.")
+
     return Config(
         bot_token=bot_tokens[0],
         bot_tokens=bot_tokens,
@@ -65,4 +74,5 @@ def load_config() -> Config:
         admin_ids=admin_ids,
         database_path=os.getenv("DATABASE_PATH", "data/kino_bot.sqlite3"),
         log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
+        access_group_id=access_group_id,
     )
