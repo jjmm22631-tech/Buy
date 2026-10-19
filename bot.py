@@ -67,10 +67,15 @@ class AvailabilityMiddleware(BaseMiddleware):
         message = event.message
         callback = event.callback_query
         join_request = event.chat_join_request
+        if join_request is not None:
+            return await handler(event, data)
+        if message and message.chat.type != "private":
+            return None
+        if callback and callback.message and callback.message.chat.type != "private":
+            return None
         user = (
             callback.from_user if callback else
-            message.from_user if message else
-            join_request.from_user if join_request else None
+            message.from_user if message else None
         )
         if user is None:
             return await handler(event, data)

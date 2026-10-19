@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
-from bot import PollingInstanceLock, _handle_healthcheck, healthcheck_response
+from bot import AvailabilityMiddleware, PollingInstanceLock, _handle_healthcheck, healthcheck_response
 from config import Config
 from handlers.common import is_second_bot
 from handlers.start import DEFAULT_SERIES_WELCOME, DEFAULT_WELCOME, get_welcome, welcome_with_code_prompt
@@ -74,6 +74,41 @@ class HealthcheckTests(unittest.TestCase):
         self.assertIsInstance(admin_menu(), ReplyKeyboardMarkup)
         self.assertIsInstance(movie_menu(), ReplyKeyboardMarkup)
         self.assertIsInstance(main_menu(is_admin=False, hide_keyboard=True), ReplyKeyboardRemove)
+
+
+class AvailabilityMiddlewareTests(unittest.IsolatedAsyncioTestCase):
+    async def test_group_messages_are_ignored_without_database_or_handler_access(self) -> None:
+        middleware = AvailabilityMiddleware()
+        message = Mock(
+            chat=Mock(type="supergroup"),
+            from_user=Mock(id=2001, full_name="Group User", username=None),
+            answer=AsyncMock(),
+        )
+        event = Mock(message=message, callback_query=None, chat_join_request=None)
+        handler = AsyncMock()
+        db = AsyncMock()
+        config = Config("token", ("token",), 1001, (1001,), "db.sqlite3", "INFO")
+
+        result = await middleware(handler, event, {"db": db, "config": config})
+
+        self.assertIsNone(result)
+        handler.assert_not_awaited()
+        db.execute.assert_not_awaited()
+        message.answer.assert_not_awaited()
+
+    async def test_join_requests_bypass_normal_group_middleware(self) -> None:
+        middleware = AvailabilityMiddleware()
+        join_request = Mock(from_user=Mock(id=2002))
+        event = Mock(message=None, callback_query=None, chat_join_request=join_request)
+        handler = AsyncMock(return_value="observed")
+        db = AsyncMock()
+        config = Config("token", ("token",), 1001, (1001,), "db.sqlite3", "INFO")
+
+        result = await middleware(handler, event, {"db": db, "config": config})
+
+        self.assertEqual(result, "observed")
+        handler.assert_awaited_once_with(event, {"db": db, "config": config})
+        db.execute.assert_not_awaited()
 
 
 class HealthcheckServerTests(unittest.IsolatedAsyncioTestCase):

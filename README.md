@@ -55,6 +55,8 @@ Admin panelidagi **📢 Majburiy obuna** bo‘limini oching. **➕ Kanal qo‘sh
 
 Botni tekshiriladigan har bir kanal yoki guruhga administrator qilib qo‘shing; bot a’zolikni tekshira olishi va maxfiy taklif havolasini yaratishi uchun administrator bo‘lishi kerak. Bot `/start` bosilganda barcha ulangan chatlardagi a’zolikni tekshiradi. Birortasiga a’zo bo‘lmasa, obuna havolalari va **✅ Obunani tekshirish** tugmasini ko‘rsatadi; barcha chatlarda a’zoligi tasdiqlangach, bot menyusini ochadi.
 
+Bot guruhdagi xabar, kino kodi yoki buyruqlarga javob bermaydi; bot bilan faqat shaxsiy chatda ishlanadi. Guruhda bot faqat Telegram yuborgan join-request yangilanishini kuzatib, foydalanuvchiga botdan foydalanish ruxsatini yozadi. Bot join request’ni qabul qilmaydi va rad ham etmaydi — guruh admini o‘zi boshqaradi.
+
 Buyruqlar orqali boshqarish ham mumkin:
 
 ```text
