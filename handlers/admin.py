@@ -537,8 +537,13 @@ async def start_add_channel_or_group(
             f"🔒 Yopiq {'kanal' if chat_type == 'channel' else 'guruh'}ni qo‘shish uchun chat ID’sini yuboring "
             "yoki o‘sha chatdagi xabarni botga forward qiling.\n"
             "Taklif havolasi bilan: `chat_id | https://t.me/+...` formatida yuboring. "
-            "Bot chat ID’siz taklif havolasini tekshira olmaydi."
         )
+        if chat_type == "group":
+            prompt += (
+                "Guruh uchun join-request (zayavkali) taklif havolasini yuboring; "
+                "chat ID a’zolikni tekshirish uchun saqlanadi. "
+            )
+        prompt += "Bot chat ID’siz taklif havolasini tekshira olmaydi."
     await callback.message.answer(
         f"{prompt}\nBot shu chatda administrator bo‘lishi kerak. Bekor qilish: /cancel"
     )
@@ -644,6 +649,17 @@ async def save_linked_channel_or_group(
     if bot_member.status not in {"administrator", "creator"}:
         await message.answer("Bot kanal yoki guruhda administrator emas. Avval botga administrator huquqini bering:")
         return
+    if (
+        expected_type == "group"
+        and bot_member.status != "creator"
+        and not getattr(bot_member, "can_invite_users", False)
+        and supplied_invite is None
+    ):
+        await message.answer(
+            "Bot guruhda administrator, lekin taklif havolasi yaratish huquqi yo‘q. "
+            "Botga “Foydalanuvchilarni taklif qilish” huquqini bering yoki join-request taklif havolasini yuboring:"
+        )
+        return
     chat_username = getattr(chat, "username", None)
     chat_title = chat.title or chat_username or str(chat.id)
     if supplied_invite:
@@ -652,12 +668,25 @@ async def save_linked_channel_or_group(
         invite_link = f"https://t.me/{chat_username}"
     else:
         try:
-            invite = await bot.create_chat_invite_link(chat_id=chat.id)
+            if expected_type == "group":
+                invite = await bot.create_chat_invite_link(
+                    chat_id=chat.id,
+                    creates_join_request=True,
+                )
+                if invite.creates_join_request is not True:
+                    await message.answer(
+                        "Telegram join-request talab qiladigan havolani yaratmadi. "
+                        "Bot huquqlarini tekshiring yoki guruh adminidan zayavkali havola olib yuboring:"
+                    )
+                    return
+            else:
+                invite = await bot.create_chat_invite_link(chat_id=chat.id)
         except TelegramAPIError as error:
             logger.warning("Maxfiy chat havolasi yaratilmadi: chat_id=%s error=%s", chat.id, type(error).__name__)
             await message.answer(
                 "Bot chatni tekshirdi, ammo taklif havolasi yarata olmadi. "
-                "Botga taklif havolasi yaratish huquqini bering yoki `chat_id | https://t.me/+...` yuboring."
+                "Botga “Foydalanuvchilarni taklif qilish” huquqini bering yoki "
+                "`chat_id | https://t.me/+...` formatida zayavkali havolani yuboring."
             )
             return
         invite_link = invite.invite_link

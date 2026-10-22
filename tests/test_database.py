@@ -311,9 +311,14 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
         bot = SimpleNamespace(
             id=9001,
             get_chat=AsyncMock(return_value=chat),
-            get_chat_member=AsyncMock(return_value=SimpleNamespace(status="administrator")),
+            get_chat_member=AsyncMock(
+                return_value=SimpleNamespace(status="administrator", can_invite_users=True)
+            ),
             create_chat_invite_link=AsyncMock(
-                return_value=SimpleNamespace(invite_link="https://t.me/+private-group")
+                return_value=SimpleNamespace(
+                    invite_link="https://t.me/+private-group",
+                    creates_join_request=True,
+                )
             ),
         )
         config = Config("token", ("token",), 1001, (1001,), "db.sqlite3", "INFO")
@@ -324,9 +329,92 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
             "SELECT * FROM bot_channels WHERE bot_id=9001 AND channel_id=-100123"
         )
         self.assertEqual(channel["chat_type"], "group")
+        self.assertEqual(channel["channel_id"], -100123)
         self.assertEqual(channel["invite_link"], "https://t.me/+private-group")
-        bot.create_chat_invite_link.assert_awaited_once_with(chat_id=-100123)
+        bot.create_chat_invite_link.assert_awaited_once_with(
+            chat_id=-100123,
+            creates_join_request=True,
+        )
         state.clear.assert_awaited_once()
+
+    async def test_private_group_requires_invite_permission_to_generate_request_link(self) -> None:
+        await self.db.add_admin(1001, "owner", ["channels"], 1001)
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=1001),
+            text="-100123",
+            forward_origin=None,
+            answer=AsyncMock(),
+        )
+        state = SimpleNamespace(
+            get_data=AsyncMock(return_value={"chat_type": "group", "visibility": "private"}),
+            clear=AsyncMock(),
+        )
+        bot = SimpleNamespace(
+            id=9001,
+            get_chat=AsyncMock(
+                return_value=SimpleNamespace(
+                    id=-100123,
+                    type="supergroup",
+                    username=None,
+                    title="Maxfiy guruh",
+                )
+            ),
+            get_chat_member=AsyncMock(
+                return_value=SimpleNamespace(status="administrator", can_invite_users=False)
+            ),
+            create_chat_invite_link=AsyncMock(),
+        )
+        config = Config("token", ("token",), 1001, (1001,), "db.sqlite3", "INFO")
+
+        await save_linked_channel_or_group(message, state, self.db, config, bot)
+
+        bot.create_chat_invite_link.assert_not_awaited()
+        self.assertIsNone(
+            await self.db.fetchone(
+                "SELECT channel_id FROM bot_channels WHERE bot_id=9001 AND channel_id=-100123"
+            )
+        )
+        message.answer.assert_awaited()
+        self.assertIn("Foydalanuvchilarni taklif qilish", message.answer.await_args.args[0])
+
+    async def test_private_group_keeps_supplied_request_link_separate_from_chat_id(self) -> None:
+        await self.db.add_admin(1001, "owner", ["channels"], 1001)
+        request_link = "https://t.me/+group-request"
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=1001),
+            text=f"-100123 | {request_link}",
+            forward_origin=None,
+            answer=AsyncMock(),
+        )
+        state = SimpleNamespace(
+            get_data=AsyncMock(return_value={"chat_type": "group", "visibility": "private"}),
+            clear=AsyncMock(),
+        )
+        bot = SimpleNamespace(
+            id=9001,
+            get_chat=AsyncMock(
+                return_value=SimpleNamespace(
+                    id=-100123,
+                    type="supergroup",
+                    username=None,
+                    title="Maxfiy guruh",
+                )
+            ),
+            get_chat_member=AsyncMock(
+                return_value=SimpleNamespace(status="administrator", can_invite_users=False)
+            ),
+            create_chat_invite_link=AsyncMock(),
+        )
+        config = Config("token", ("token",), 1001, (1001,), "db.sqlite3", "INFO")
+
+        await save_linked_channel_or_group(message, state, self.db, config, bot)
+
+        channel = await self.db.fetchone(
+            "SELECT channel_id,invite_link FROM bot_channels WHERE bot_id=9001 AND channel_id=-100123"
+        )
+        self.assertEqual(channel["channel_id"], -100123)
+        self.assertEqual(channel["invite_link"], request_link)
+        bot.create_chat_invite_link.assert_not_awaited()
 
     async def test_custom_join_request_invite_is_preserved_for_public_chat(self) -> None:
         await self.db.add_admin(1001, "owner", ["channels"], 1001)
